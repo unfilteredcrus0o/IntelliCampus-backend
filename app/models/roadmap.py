@@ -1,0 +1,94 @@
+# ==========================================
+# Roadmap Data Models
+# ------------------------------------------
+# Defines SQLAlchemy ORM models for:
+#
+# - Roadmap:
+#     Tracks a user's learning roadmap with title, level,
+#     interests, timelines, and overall status.
+#
+# - Milestone:
+#     Represents a stage in a roadmap, containing ordered topics.
+#
+# - Topic:
+#     Represents an individual learning unit with optional
+#     cached LLM-generated explanations.
+#
+# - UserProgress:
+#     Tracks a specific user's progress on each topic,
+#     including start/completion timestamps.
+#
+# Enums:
+# - RoadmapStatus: pending, ready, completed
+# - ProgressStatus: not_started, in_progress, completed
+#
+# Relationships:
+# - Roadmap ↔ Milestones (1:N)
+# - Milestone ↔ Topics (1:N)
+# - Topic ↔ UserProgress (1:N)
+# ==========================================
+
+from sqlalchemy import Column, String, Enum, ForeignKey, Integer, Text, DateTime, JSON
+from sqlalchemy.orm import relationship
+from datetime import datetime
+import enum
+import uuid
+from app.db.database import Base
+
+class RoadmapStatus(str, enum.Enum):
+    pending = "pending"
+    ready = "ready" 
+    completed = "completed"
+
+class ProgressStatus(str, enum.Enum):
+    not_started = "not_started"
+    in_progress = "in_progress"
+    completed = "completed"
+
+class Roadmap(Base):
+    __tablename__ = "roadmaps"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=True)
+    title = Column(String, default="Custom Roadmap")
+    level = Column(String, nullable=False)
+    interests = Column(JSON)
+    timelines = Column(JSON)
+    status = Column(Enum(RoadmapStatus), default=RoadmapStatus.pending)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    milestones = relationship("Milestone", back_populates="roadmap", cascade="all, delete", order_by="Milestone.order")
+
+class Milestone(Base):
+    __tablename__ = "milestones"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    roadmap_id = Column(String, ForeignKey("roadmaps.id", ondelete="CASCADE"))
+    name = Column(String, nullable=False)
+    order = Column(Integer)
+
+    roadmap = relationship("Roadmap", back_populates="milestones")
+    topics = relationship("Topic", back_populates="milestone", cascade="all, delete")
+
+class Topic(Base):
+    __tablename__ = "topics"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    milestone_id = Column(String, ForeignKey("milestones.id", ondelete="CASCADE"))
+    name = Column(String, nullable=False)
+    explanation_md = Column(Text, nullable=True)
+    
+    milestone = relationship("Milestone", back_populates="topics")
+    progress = relationship("UserProgress", back_populates="topic", cascade="all, delete")
+
+class UserProgress(Base):
+    __tablename__ = "user_progress"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    topic_id = Column(String, ForeignKey("topics.id", ondelete="CASCADE"))
+    status = Column(Enum(ProgressStatus), default=ProgressStatus.not_started)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    
+    topic = relationship("Topic", back_populates="progress")
