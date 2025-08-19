@@ -6,7 +6,7 @@ class RoadmapCreate(BaseModel):
     selectedTopics: List[str]
     skillLevel: str
     duration: str
-    user_id: Optional[str] = None
+    title: Optional[str] = None
 
 class TopicResponse(BaseModel):
     id: str
@@ -26,6 +26,5 @@ class RoadmapResponse(BaseModel):
     milestones: List[MilestoneResponse]
 
 class ProgressUpdate(BaseModel):
-    user_id: str
     topic_id: str
     status: str
