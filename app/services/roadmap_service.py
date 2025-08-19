@@ -18,7 +18,7 @@
 # - call_llm for AI-generated content
 # --------------------------------------------------
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.models.roadmap import Roadmap, Milestone, Topic, UserProgress, RoadmapStatus, ProgressStatus
 from app.schemas.roadmap import RoadmapCreate
 from app.services.llm_client import call_llm
@@ -144,3 +144,104 @@ def update_progress(db: Session, user_id: str, topic_id: str, status: str):
 
     db.commit()
     return progress
+
+def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str):
+    
+    roadmap = (
+        db.query(Roadmap)
+        .options(
+             joinedload(Roadmap.milestones)
+            .joinedload(Milestone.topics)
+            .joinedload(Topic.progress)
+        )
+        .filter(Roadmap.id == roadmap_id, Roadmap.user_id == user_id)
+        .first()
+    )
+    
+    if not roadmap:
+        return None
+    
+    all_topic_ids = []
+    for milestone in roadmap.milestones:
+        for topic in milestone.topics:
+            all_topic_ids.append(topic.id)
+    
+    progress_data = db.query(UserProgress).filter(
+        UserProgress.user_id == user_id,
+        UserProgress.topic_id.in_(all_topic_ids)
+    ).all()
+    
+    progress_lookup = {p.topic_id: p for p in progress_data}
+    
+    roadmap_data = {
+        'roadmap': roadmap,
+        'milestones': []
+    }
+    
+    total_topics = 0
+    completed_topics = 0
+    total_milestones = len(roadmap.milestones)
+    completed_milestones = 0
+    
+    for milestone in roadmap.milestones:
+        milestone_topics = []
+        milestone_completed = 0
+        milestone_total = len(milestone.topics)
+        
+        for topic in milestone.topics:
+            total_topics += 1
+            progress = progress_lookup.get(topic.id)
+            
+            if progress:
+                topic_status = progress.status.value
+                topic_progress_percentage = 100 if topic_status == "completed" else 50 if topic_status == "in_progress" else 0
+                if topic_status == "completed":
+                    completed_topics += 1
+                    milestone_completed += 1
+            else:
+                topic_status = "not_started"
+                topic_progress_percentage = 0
+                progress = None
+            
+            topic_data = {
+                'topic': topic,
+                'progress': {
+                    'status': topic_status,
+                    'started_at': progress.started_at if progress else None,
+                    'completed_at': progress.completed_at if progress else None,
+                    'progress_percentage': topic_progress_percentage
+                }
+            }
+            milestone_topics.append(topic_data)
+        
+        milestone_progress_percentage = int((milestone_completed / milestone_total * 100)) if milestone_total > 0 else 0
+        milestone_status = "completed" if milestone_completed == milestone_total else "in_progress" if milestone_completed > 0 else "not_started"
+        
+        if milestone_status == "completed":
+            completed_milestones += 1
+        
+        milestone_data = {
+            'milestone': milestone,
+            'topics': milestone_topics,
+            'progress': {
+                'total_topics': milestone_total,
+                'completed_topics': milestone_completed,
+                'progress_percentage': milestone_progress_percentage,
+                'status': milestone_status
+            }
+        }
+        roadmap_data['milestones'].append(milestone_data)
+    
+    roadmap_progress_percentage = int((completed_topics / total_topics * 100)) if total_topics > 0 else 0
+    roadmap_status = "completed" if completed_topics == total_topics else "in_progress" if completed_topics > 0 else "not_started"
+    
+    roadmap_data['progress'] = {
+        'total_milestones': total_milestones,
+        'completed_milestones': completed_milestones,
+        'total_topics': total_topics,
+        'completed_topics': completed_topics,
+        'progress_percentage': roadmap_progress_percentage,
+        'status': roadmap_status
+    }
+    
+    return roadmap_data
