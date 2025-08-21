@@ -30,7 +30,7 @@
 
 from sqlalchemy import Column, String, Enum, ForeignKey, Integer, Text, DateTime, JSON
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 import uuid
 from app.db.database import Base
@@ -55,7 +55,7 @@ class Roadmap(Base):
     interests = Column(JSON)
     timelines = Column(JSON)
     status = Column(Enum(RoadmapStatus), default=RoadmapStatus.pending)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     milestones = relationship("Milestone", back_populates="roadmap", cascade="all, delete", order_by="Milestone.order")
 

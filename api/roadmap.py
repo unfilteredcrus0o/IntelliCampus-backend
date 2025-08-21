@@ -21,7 +21,7 @@ from typing import List
 from app.db.database import get_db
 from app.models.roadmap import Roadmap, Milestone, Topic, UserProgress
 from app.models.user import User
-from app.schemas.roadmap import RoadmapCreate, RoadmapResponse, MilestoneResponse, TopicResponse, ProgressUpdate, TopicProgressResponse, MilestoneProgressResponse, RoadmapProgressResponse
+from app.schemas.roadmap import RoadmapCreate, RoadmapResponse, MilestoneResponse, TopicResponse, ProgressUpdate, TopicProgressResponse, MilestoneProgressResponse, RoadmapProgressResponse, DashboardRoadmapResponse, DashboardEnrollmentResponse
 from app.services.roadmap_service import create_roadmap_with_llm, get_topic_explanation, update_progress, get_roadmap_with_progress
 from app.core.security import get_current_user
 
@@ -206,6 +206,43 @@ def get_user_roadmaps(
     
     return roadmaps_data
 
+@router.get("/dashboard/enrollments", response_model=DashboardEnrollmentResponse)
+def get_dashboard_enrollments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    roadmaps = (
+        db.query(Roadmap)
+        .filter(Roadmap.user_id == current_user.id)
+        .all()
+    )
+    
+    if not roadmaps:
+        return DashboardEnrollmentResponse(
+            success=False,
+            message="You haven't enrolled in any course.",
+            data=[]
+        )
+
+    roadmaps_data = []
+    for roadmap in roadmaps:
+        roadmap_progress_data = get_roadmap_with_progress(db, roadmap.id, current_user.id)
+        progress_percentage = roadmap_progress_data['progress']['progress_percentage']
+        
+        roadmaps_data.append(DashboardRoadmapResponse(
+            id=roadmap.id,
+            title=roadmap.title,
+            status=roadmap.status.value,
+            progress_percentage=progress_percentage
+        ))
+    
+    return DashboardEnrollmentResponse(
+        success=True,
+        message=f"Found {len(roadmaps_data)} enrolled course(s).",
+        data=roadmaps_data
+    )
+
 @router.post("/progress/update")
 def update_topic_progress(
     progress_data: ProgressUpdate,
@@ -249,7 +286,6 @@ def update_topic_progress(
                 "completed_milestones": roadmap_progress['completed_milestones'],
                 "total_topics": roadmap_progress['total_topics'],
                 "completed_topics": roadmap_progress['completed_topics'],
-                "progress_percentage": roadmap_progress['progress_percentage'],
                 "status": roadmap_progress['status']
             }
         }

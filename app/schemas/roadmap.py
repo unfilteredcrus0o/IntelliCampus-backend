@@ -43,6 +43,16 @@ class RoadmapResponse(BaseModel):
     progress: Optional[RoadmapProgressResponse] = None
 
 class ProgressUpdate(BaseModel):
-    user_id: str
     topic_id: str
     status: str
+
+class DashboardRoadmapResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    progress_percentage: int
+
+class DashboardEnrollmentResponse(BaseModel):
+    success: bool
+    message: str
+    data: List[DashboardRoadmapResponse]

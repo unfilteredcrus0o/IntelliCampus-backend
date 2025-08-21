@@ -24,7 +24,7 @@ from app.schemas.roadmap import RoadmapCreate
 from app.services.llm_client import call_llm
 from app.services.roadmap_prompts import CREATE_ROADMAP_PROMPT, TOPIC_EXPLANATION_PROMPT
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 def create_roadmap_with_llm(db: Session, roadmap_data: dict):
 
@@ -138,9 +138,9 @@ def update_progress(db: Session, user_id: str, topic_id: str, status: str):
         progress.status = ProgressStatus(status)
 
     if status == "completed":
-        progress.completed_at = datetime.utcnow()
+        progress.completed_at = datetime.now(timezone.utc)
     elif status == "in_progress" and not progress.started_at:
-        progress.started_at = datetime.utcnow()
+        progress.started_at = datetime.now(timezone.utc)
 
     db.commit()
     return progress

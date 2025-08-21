@@ -1,13 +1,15 @@
 from passlib.context import CryptContext
 from jose import jwt, JWTError, ExpiredSignatureError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from app.core.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+from app.core.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS
 from app.db.database import get_db
-from app.models.user import User
+from app.models.user import User, RefreshToken
 import logging
+import hashlib
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ def verify_password(plain_password: str, hashed_password: str):
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -63,8 +65,8 @@ def get_current_user(
     if user is None:
         logger.warning(f"Valid token but user not found in database: {email}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User account not found",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found or deleted",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -76,3 +78,82 @@ def get_current_user(
         )
     
     return user
+
+def generate_refresh_token() -> str:
+    return secrets.token_urlsafe(32)
+
+def hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def create_refresh_token(db: Session, user_id: str) -> str:
+    token = generate_refresh_token()
+    token_hash = hash_refresh_token(token)
+    
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    
+    old_tokens = db.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.is_revoked == False
+    ).all()
+    
+    for old_token in old_tokens:
+        old_token.is_revoked = True
+    
+    refresh_token_record = RefreshToken(
+        user_id=user_id,
+        token_hash=token_hash,
+        expires_at=expires_at
+    )
+    
+    db.add(refresh_token_record)
+    db.commit()
+    
+    return token
+
+def verify_refresh_token(db: Session, token: str) -> User | None:
+    if not token:
+        return None
+    
+    token_hash = hash_refresh_token(token)
+    
+    refresh_token_record = db.query(RefreshToken).filter(
+        RefreshToken.token_hash == token_hash,
+        RefreshToken.is_revoked == False,
+        RefreshToken.expires_at > datetime.now(timezone.utc)
+    ).first()
+    
+    if not refresh_token_record:
+        return None
+    
+    user = db.query(User).filter(User.id == refresh_token_record.user_id).first()
+    return user
+
+def revoke_refresh_token(db: Session, token: str) -> bool:
+    if not token:
+        return False
+        
+    token_hash = hash_refresh_token(token)
+    
+    refresh_token_record = db.query(RefreshToken).filter(
+        RefreshToken.token_hash == token_hash,
+        RefreshToken.is_revoked == False
+    ).first()
+    
+    if refresh_token_record:
+        refresh_token_record.is_revoked = True
+        db.commit()
+        return True
+    
+    return False
+
+def revoke_all_user_tokens(db: Session, user_id: str) -> bool:
+    tokens = db.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.is_revoked == False
+    ).all()
+    
+    for token in tokens:
+        token.is_revoked = True
+    
+    db.commit()
+    return True
