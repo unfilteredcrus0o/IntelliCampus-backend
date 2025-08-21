@@ -65,8 +65,8 @@ def get_current_user(
     if user is None:
         logger.warning(f"Valid token but user not found in database: {email}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User account not found",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found or deleted",
             headers={"WWW-Authenticate": "Bearer"},
         )
     

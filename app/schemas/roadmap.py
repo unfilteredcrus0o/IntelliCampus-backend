@@ -50,6 +50,7 @@ class DashboardRoadmapResponse(BaseModel):
     id: str
     title: str
     status: str
+    progress_percentage: int
 
 class DashboardEnrollmentResponse(BaseModel):
     success: bool

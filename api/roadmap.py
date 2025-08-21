@@ -227,10 +227,14 @@ def get_dashboard_enrollments(
 
     roadmaps_data = []
     for roadmap in roadmaps:
+        roadmap_progress_data = get_roadmap_with_progress(db, roadmap.id, current_user.id)
+        progress_percentage = roadmap_progress_data['progress']['progress_percentage']
+        
         roadmaps_data.append(DashboardRoadmapResponse(
             id=roadmap.id,
             title=roadmap.title,
-            status=roadmap.status.value
+            status=roadmap.status.value,
+            progress_percentage=progress_percentage
         ))
     
     return DashboardEnrollmentResponse(
@@ -282,7 +286,6 @@ def update_topic_progress(
                 "completed_milestones": roadmap_progress['completed_milestones'],
                 "total_topics": roadmap_progress['total_topics'],
                 "completed_topics": roadmap_progress['completed_topics'],
-                "progress_percentage": roadmap_progress['progress_percentage'],
                 "status": roadmap_progress['status']
             }
         }
