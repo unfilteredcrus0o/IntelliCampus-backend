@@ -43,7 +43,6 @@ class UserProfile(BaseModel):
     name: str
     email: str
     role: UserRole
-    created_at: datetime
     
     class Config:
         from_attributes = True
