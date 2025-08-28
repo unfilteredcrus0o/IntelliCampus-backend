@@ -1,32 +1,22 @@
-# ==========================================
-# Roadmap Data Models
-# ------------------------------------------
-# Defines SQLAlchemy ORM models for:
-#
-# - Roadmap:
-#     Tracks a user's learning roadmap with title, level,
-#     interests, timelines, and overall status.
-#
-# - Milestone:
-#     Represents a stage in a roadmap, containing ordered topics.
-#
-# - Topic:
-#     Represents an individual learning unit with optional
-#     cached LLM-generated explanations.
-#
-# - UserProgress:
-#     Tracks a specific user's progress on each topic,
-#     including start/completion timestamps.
-#
-# Enums:
-# - RoadmapStatus: pending, ready, completed
-# - ProgressStatus: not_started, in_progress, completed
-#
-# Relationships:
-# - Roadmap ↔ Milestones (1:N)
-# - Milestone ↔ Topics (1:N)
-# - Topic ↔ UserProgress (1:N)
-# ==========================================
+"""
+Roadmap Data Models  
+=====================================
+Comprehensive SQLAlchemy ORM models for learning management system.
+
+Models:
+- Roadmap: Learning path with creator tracking and status management
+- Milestone: Ordered stages within roadmaps containing multiple topics  
+- Topic: Individual learning units with AI-generated explanations
+- UserProgress: Tracks user completion status per topic with timestamps
+- Assignment: Manager-to-user roadmap assignments with due dates
+
+Features:
+- UUID primary keys for security
+- Proper foreign key relationships with CASCADE deletes
+- Enum types for status consistency  
+- Creator-based ownership separate from assignment system
+- Comprehensive indexing for query performance
+"""
 
 from sqlalchemy import Column, String, Enum, ForeignKey, Integer, Text, DateTime, JSON
 from sqlalchemy.orm import relationship
@@ -49,7 +39,7 @@ class Roadmap(Base):
     __tablename__ = "roadmaps"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    creator_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, default="Custom Roadmap")
     level = Column(String, nullable=False)
     interests = Column(JSON)
@@ -92,3 +82,13 @@ class UserProgress(Base):
     completed_at = Column(DateTime, nullable=True)
     
     topic = relationship("Topic", back_populates="progress")
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    roadmap_id = Column(String, ForeignKey("roadmaps.id", ondelete="CASCADE"), nullable=False, index=True)
+    assigned_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    assigned_to = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    due_date = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

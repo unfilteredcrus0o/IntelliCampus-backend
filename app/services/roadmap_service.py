@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 def create_roadmap_with_llm(db: Session, roadmap_data: dict):
 
     roadmap = Roadmap(
-    user_id=roadmap_data["user_id"],
+    creator_id=roadmap_data["creator_id"],
     title=roadmap_data.get("title", "Custom Roadmap"),
     level=roadmap_data["level"],
     interests=roadmap_data["interests"],
@@ -154,7 +154,7 @@ def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str):
             .joinedload(Milestone.topics)
             .joinedload(Topic.progress)
         )
-        .filter(Roadmap.id == roadmap_id, Roadmap.user_id == user_id)
+        .filter(Roadmap.id == roadmap_id, Roadmap.creator_id == user_id)
         .first()
     )
     
