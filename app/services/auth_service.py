@@ -8,16 +8,16 @@
 
 from sqlalchemy.orm import Session
 from datetime import timedelta
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.core.security import (get_password_hash, verify_password, create_access_token, create_refresh_token, verify_refresh_token)
 from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES
 
-def register_user(db: Session, name: str, email: str, password: str):
+def register_user(db: Session, name: str, email: str, password: str, role: UserRole = UserRole.employee):
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise Exception("Email already registered")
     hashed_password = get_password_hash(password)
-    new_user = User(name=name, email=email, password_hash=hashed_password)
+    new_user = User(name=name, email=email, password_hash=hashed_password, role=role)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -60,6 +60,7 @@ def refresh_user_token(db: Session, refresh_token: str):
         "user": {
             "id": user.id,
             "email": user.email,
-            "name": user.name
+            "name": user.name,
+            "role": user.role.value
         }
     }

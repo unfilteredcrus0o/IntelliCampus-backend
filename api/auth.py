@@ -9,7 +9,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from app.schemas.user import UserCreate, UserLogin, LoginResponse, RefreshTokenRequest, RefreshTokenResponse
+from app.schemas.user import UserCreate, UserLogin, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, UserProfile
 from app.services.auth_service import register_user, authenticate_user, refresh_user_token
 from app.core.security import revoke_refresh_token, get_current_user
 from app.db.database import get_db
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 @router.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
     try:
-        register_user(db, user.name, user.email, user.password)
+        register_user(db, user.name, user.email, user.password, user.role)
         return {"message": "User registered successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -57,3 +57,18 @@ def logout(
         return {"message": "Successfully logged out"}
     else:
         return {"message": "Logout completed"}
+
+@router.get("/user", response_model=UserProfile)
+def get_current_user_profile(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the currently authenticated user's profile information.
+    Requires valid JWT token in Authorization header.
+    """
+    return UserProfile(
+        id=current_user.id,
+        name=current_user.name,
+        email=current_user.email,
+        role=current_user.role,
+    )
