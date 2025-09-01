@@ -17,11 +17,22 @@ from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-@router.post("/register")
+@router.post("/register", deprecated=True)
 def register(user: UserCreate, db: Session = Depends(get_db)):
+    from fastapi import Response
     try:
         register_user(db, user.user_id, user.name, user.email, user.password, user.role, user.manager_id)
-        return {"message": "User registered successfully"}
+
+        response = Response(
+            content='{"message": "User registered successfully"}',
+            media_type="application/json",
+            headers={
+                "X-Deprecated": "true",
+                "X-Deprecation-Warning": "This endpoint will be removed in v2.0. Use admin-created accounts instead.",
+                "Warning": '299 - "Deprecated API"'
+            }
+        )
+        return response
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
