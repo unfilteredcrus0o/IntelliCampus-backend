@@ -12,12 +12,24 @@ from app.models.user import User, UserRole
 from app.core.security import (get_password_hash, verify_password, create_access_token, create_refresh_token, verify_refresh_token)
 from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES
 
-def register_user(db: Session, name: str, email: str, password: str, role: UserRole = UserRole.employee):
-    existing_user = db.query(User).filter(User.email == email).first()
-    if existing_user:
+def register_user(db: Session, user_id: str, name: str, email: str, password: str, role: UserRole = UserRole.employee, manager_id: str = None):
+    existing_user_by_id = db.query(User).filter(User.id == user_id).first()
+    if existing_user_by_id:
+        raise Exception("User ID already exists")
+    
+    existing_user_by_email = db.query(User).filter(User.email == email).first()
+    if existing_user_by_email:
         raise Exception("Email already registered")
+    
+    if manager_id:
+        manager = db.query(User).filter(User.id == manager_id).first()
+        if not manager:
+            raise Exception("Manager ID does not exist")
+        if manager.role != UserRole.manager:
+            raise Exception("Specified ID is not a manager")
+    
     hashed_password = get_password_hash(password)
-    new_user = User(name=name, email=email, password_hash=hashed_password, role=role)
+    new_user = User(id=user_id, name=name, email=email, password_hash=hashed_password, role=role, manager_id=manager_id)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)

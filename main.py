@@ -4,6 +4,7 @@ from api.auth import router as auth_router
 from api.health import router as health_router
 from api.roadmap import router as roadmap_router
 from api.assignments import router as assignments_router
+from api.users import router as users_router
 
 app = FastAPI()
 
@@ -23,3 +24,4 @@ app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(roadmap_router)
 app.include_router(assignments_router)
+app.include_router(users_router)

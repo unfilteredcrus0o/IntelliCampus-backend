@@ -33,21 +33,25 @@ class RoadmapCreate(BaseModel):
 
 class TopicProgressResponse(BaseModel):
     status: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    progress_percentage: int
 
 class TopicResponse(BaseModel):
     id: str
     name: str
-    explanation_md: Optional[str]
-    progress: Optional[TopicProgressResponse] = None
+    explanation_md: Optional[str] = None
+    progress: TopicProgressResponse
 
 class MilestoneProgressResponse(BaseModel):
     status: str
+    progress_percentage: int
 
 class MilestoneResponse(BaseModel):
     id: str
     name: str
     topics: List[TopicResponse]
-    progress: Optional[MilestoneProgressResponse] = None
+    progress: MilestoneProgressResponse
 
 class RoadmapProgressResponse(BaseModel):
     total_milestones: int
@@ -64,11 +68,10 @@ class RoadmapResponse(BaseModel):
     status: str
     creator_id: str
     milestones: List[MilestoneResponse]
-    progress: Optional[RoadmapProgressResponse] = None
+    progress: RoadmapProgressResponse
 
 class ProgressUpdate(BaseModel):
-    topic_id: str
-    status: str
+    status: str = Field(..., description="Topic status: not_started, in_progress, completed")
 
 class DashboardRoadmapResponse(BaseModel):
     id: str
@@ -77,28 +80,26 @@ class DashboardRoadmapResponse(BaseModel):
     progress_percentage: int
 
 class DashboardEnrollmentResponse(BaseModel):
-    success: bool
-    message: str
-    data: List[DashboardRoadmapResponse]
+    roadmap_id: str
+    user_id: str
+    enrolled_at: datetime
+    total_topics: int
 
 class AssignmentCreate(BaseModel):
-    roadmap_id: str = Field(description="UUID of the roadmap to assign")
-    assigned_to: List[str] = Field(min_items=1, description="List of user UUIDs (at least 1 required)")
-    due_date: Optional[str] = Field(None, description="Due date in YYYY-MM-DD format")
+    roadmap_id: str
+    assigned_to: List[str]
+    due_date: Optional[str] = None
 
 class AssignmentResponse(BaseModel):
-    id: str
+    id: int
     roadmap_id: str
     assigned_by: str
     assigned_to: str
     due_date: Optional[datetime] = None
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 class BulkAssignmentResponse(BaseModel):
     success: bool
     message: str
     created_assignments: List[AssignmentResponse]
-    failed_assignments: List[Dict[str, str]] = []
+    failed_assignments: List[Dict]

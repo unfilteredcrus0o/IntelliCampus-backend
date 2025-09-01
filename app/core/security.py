@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS
 from app.db.database import get_db
 from app.models.user import User, RefreshToken
+from app.schemas.user import UserRole
 import logging
 import hashlib
 import secrets
@@ -34,7 +35,6 @@ def verify_token(token: str):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
-            logger.warning("JWT token missing 'sub' field")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",
@@ -42,14 +42,13 @@ def verify_token(token: str):
             )
         return email
     except ExpiredSignatureError:
-        logger.info(f"Expired JWT token attempted")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except JWTError as e:
-        logger.error(f"JWT verification error: {str(e)}")
+        logger.error(f"JWT error: {type(e).__name__}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token verification failed",
@@ -78,6 +77,21 @@ def get_current_user(
         )
     
     return user
+
+def require_manager_or_superadmin(current_user: User = Depends(get_current_user)) -> User:
+
+    role_value = getattr(current_user.role, 'value', current_user.role) 
+    required_values = [UserRole.manager.value, UserRole.superadmin.value]
+    is_authorized = role_value in required_values
+
+    if not is_authorized:
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access forbidden. Your role '{role_value}' does not have sufficient privileges.",
+        )
+        
+    return current_user
 
 def generate_refresh_token() -> str:
     return secrets.token_urlsafe(32)

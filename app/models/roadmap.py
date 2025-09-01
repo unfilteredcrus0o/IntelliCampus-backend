@@ -11,7 +11,7 @@ Models:
 - Assignment: Manager-to-user roadmap assignments with due dates
 
 Features:
-- UUID primary keys for security
+- UUID primary keys for roadmap, milestone, topic
 - Proper foreign key relationships with CASCADE deletes
 - Enum types for status consistency  
 - Creator-based ownership separate from assignment system
@@ -38,7 +38,7 @@ class ProgressStatus(str, enum.Enum):
 class Roadmap(Base):
     __tablename__ = "roadmaps"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     creator_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, default="Custom Roadmap")
     level = Column(String, nullable=False)
@@ -47,15 +47,17 @@ class Roadmap(Base):
     status = Column(Enum(RoadmapStatus), default=RoadmapStatus.pending)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    milestones = relationship("Milestone", back_populates="roadmap", cascade="all, delete", order_by="Milestone.order")
+    milestones = relationship("Milestone", back_populates="roadmap", cascade="all, delete", order_by="Milestone.order_index")
 
 class Milestone(Base):
     __tablename__ = "milestones"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)  # UUID string PK
     roadmap_id = Column(String, ForeignKey("roadmaps.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
-    order = Column(Integer)
+    description = Column(Text, nullable=True)
+    estimated_duration = Column(String, nullable=True)
+    order_index = Column(Integer, nullable=False)
 
     roadmap = relationship("Roadmap", back_populates="milestones")
     topics = relationship("Topic", back_populates="milestone", cascade="all, delete")
@@ -63,10 +65,11 @@ class Milestone(Base):
 class Topic(Base):
     __tablename__ = "topics"
     
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)  # UUID string PK
     milestone_id = Column(String, ForeignKey("milestones.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
     explanation_md = Column(Text, nullable=True)
+    order_index = Column(Integer, nullable=False)
     
     milestone = relationship("Milestone", back_populates="topics")
     progress = relationship("UserProgress", back_populates="topic", cascade="all, delete")
@@ -74,10 +77,11 @@ class Topic(Base):
 class UserProgress(Base):
     __tablename__ = "user_progress"
     
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     topic_id = Column(String, ForeignKey("topics.id", ondelete="CASCADE"))
     status = Column(Enum(ProgressStatus), default=ProgressStatus.not_started)
+    last_accessed = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     
@@ -86,7 +90,7 @@ class UserProgress(Base):
 class Assignment(Base):
     __tablename__ = "assignments"
     
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     roadmap_id = Column(String, ForeignKey("roadmaps.id", ondelete="CASCADE"), nullable=False, index=True)
     assigned_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     assigned_to = Column(String, ForeignKey("users.id"), nullable=False, index=True)
