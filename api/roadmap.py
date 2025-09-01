@@ -254,3 +254,51 @@ def list_dashboard_enrollments(
             total_topics=total_topics
         ))
     return responses
+
+@router.post("/roadmap/{roadmap_id}/enroll")
+def enroll_in_roadmap(
+    roadmap_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Imported here to avoid circular imports
+    from app.services.roadmap_service import auto_enroll_user_in_roadmap
+    
+    try:
+        roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+        if not roadmap:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Roadmap not found")
+        
+        from app.models.roadmap import Assignment
+        assignment = db.query(Assignment).filter(
+            Assignment.roadmap_id == roadmap_id,
+            Assignment.assigned_to == current_user.id
+        ).first()
+        
+        is_creator = roadmap.creator_id == current_user.id
+        
+        if not assignment and not is_creator:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="You must be assigned to this roadmap or be its creator to enroll"
+            )
+        
+        created_count = auto_enroll_user_in_roadmap(db, current_user.id, roadmap_id)
+        db.commit()
+        
+        return {
+            "message": f"Successfully enrolled in roadmap: {roadmap.title}",
+            "roadmap_id": roadmap_id,
+            "roadmap_title": roadmap.title,
+            "topics_created": created_count,
+            "enrollment_type": "assignment" if assignment else "creator"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to enroll in roadmap: {str(e)}"
+        )

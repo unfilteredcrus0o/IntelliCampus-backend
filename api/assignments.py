@@ -17,7 +17,7 @@ from typing import List, Dict
 from app.db.database import get_db
 from app.models.user import User
 from app.models.roadmap import Assignment, Roadmap
-from app.services.roadmap_service import auto_enroll_user_in_roadmap
+# Removed auto_enroll_user_in_roadmap import - assignments should not force enrollment
 from app.schemas.roadmap import AssignmentCreate, BulkAssignmentResponse, AssignmentResponse
 from app.core.security import get_current_user
 from datetime import datetime, timezone
@@ -146,10 +146,8 @@ def create_assignments(
                 )
                 created_assignments.append(assignment)
                 
-                logger.debug(f"Auto-enrolling user {user_id} in roadmap {assignment_data.roadmap_id}")
-                auto_enroll_user_in_roadmap(db, user_id, assignment_data.roadmap_id)
-                
                 logger.info(f"Successfully assigned roadmap {assignment_data.roadmap_id} to user {user_id}")
+                logger.debug(f"Assignment created - user can enroll separately if they choose")
                 
             except Exception as e:
                 logger.error(f"Failed to create assignment for user {user_id}: {str(e)}")
@@ -178,6 +176,52 @@ def create_assignments(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create assignments: {str(e)}"
+        )
+
+@router.get("/assignments/my")
+def get_my_assignments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    logger.info(f"User {current_user.id} requesting their assignments")
+    
+    try:
+        assignments = db.query(Assignment).filter(
+            Assignment.assigned_to == current_user.id
+        ).join(Roadmap, Assignment.roadmap_id == Roadmap.id).all()
+        
+        logger.debug(f"Found {len(assignments)} assignments for user {current_user.id}")
+        
+        assignment_list = []
+        for assignment in assignments:
+            roadmap = db.query(Roadmap).filter(Roadmap.id == assignment.roadmap_id).first()
+            assigner = db.query(User).filter(User.id == assignment.assigned_by).first()
+            
+            assignment_list.append({
+                "assignment_id": assignment.id,
+                "roadmap_id": assignment.roadmap_id,
+                "roadmap_title": roadmap.title if roadmap else "Unknown Roadmap",
+                "assigned_by": assignment.assigned_by,
+                "assigner_name": assigner.name if assigner else "Unknown Assigner",
+                "due_date": assignment.due_date,
+                "assigned_at": assignment.created_at,
+                "status": "assigned"
+            })
+        
+        response = {
+            "user_id": current_user.id,
+            "total_assignments": len(assignment_list),
+            "assignments": assignment_list
+        }
+        
+        logger.info(f"Successfully retrieved {len(assignment_list)} assignments for user {current_user.id}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error retrieving assignments for user {current_user.id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve user assignments"
         )
 
 @router.get("/assignments/count")
@@ -282,4 +326,110 @@ def get_roadmap_assignment_count(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve roadmap assignment statistics"
+        )
+
+@router.get("/assignments/{assignment_id}")
+def get_assignment_details(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    logger.info(f"User {current_user.id} requesting assignment details for {assignment_id}")
+    
+    try:
+        assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+        if not assignment:
+            logger.warning(f"Assignment {assignment_id} not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+        
+        if (assignment.assigned_by != current_user.id and 
+            assignment.assigned_to != current_user.id and 
+            current_user.role.value not in ['manager', 'superadmin']):
+            logger.warning(f"User {current_user.id} unauthorized to view assignment {assignment_id}")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized")
+        
+        roadmap = db.query(Roadmap).filter(Roadmap.id == assignment.roadmap_id).first()
+        assigner = db.query(User).filter(User.id == assignment.assigned_by).first()
+        assignee = db.query(User).filter(User.id == assignment.assigned_to).first()
+        
+        response = {
+            "assignment_id": assignment.id,
+            "roadmap": {
+                "id": assignment.roadmap_id,
+                "title": roadmap.title if roadmap else "Unknown Roadmap"
+            },
+            "assigned_by": {
+                "id": assignment.assigned_by,
+                "name": assigner.name if assigner else "Unknown User"
+            },
+            "assigned_to": {
+                "id": assignment.assigned_to,
+                "name": assignee.name if assignee else "Unknown User"
+            },
+            "due_date": assignment.due_date,
+            "created_at": assignment.created_at,
+            "status": "assigned"
+        }
+        
+        logger.info(f"Assignment details retrieved for {assignment_id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving assignment {assignment_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve assignment details"
+        )
+
+@router.delete("/assignments/{assignment_id}")
+def delete_assignment(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete/cancel an assignment (managers/superadmins only)"""
+    logger.info(f"User {current_user.id} attempting to delete assignment {assignment_id}")
+    
+    if current_user.role.value not in ['manager', 'superadmin']:
+        logger.warning(f"User {current_user.id} unauthorized to delete assignments")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, 
+                          detail="Only managers and superadmins can delete assignments")
+    
+    try:
+        assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+        if not assignment:
+            logger.warning(f"Assignment {assignment_id} not found for deletion")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+        
+        if (current_user.role.value == 'manager' and 
+            assignment.assigned_by != current_user.id):
+            logger.warning(f"Manager {current_user.id} cannot delete assignment created by {assignment.assigned_by}")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, 
+                              detail="Managers can only delete assignments they created")
+        
+        roadmap_id = assignment.roadmap_id
+        assigned_to = assignment.assigned_to
+        
+        db.delete(assignment)
+        db.commit()
+        
+        logger.info(f"Assignment {assignment_id} deleted successfully by {current_user.id}")
+        logger.info(f"Cancelled assignment: roadmap {roadmap_id} to user {assigned_to}")
+        
+        return {
+            "message": f"Assignment {assignment_id} deleted successfully",
+            "assignment_id": assignment_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting assignment {assignment_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete assignment"
         )
