@@ -17,10 +17,10 @@ from typing import List, Dict
 from app.db.database import get_db
 from app.models.user import User
 from app.models.roadmap import Assignment, Roadmap
+from app.services.roadmap_service import auto_enroll_user_in_roadmap
 from app.schemas.roadmap import AssignmentCreate, BulkAssignmentResponse, AssignmentResponse
 from app.core.security import get_current_user
-from datetime import datetime
-import uuid
+from datetime import datetime, timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,15 +46,14 @@ def _parse_due_date(date_string: str) -> datetime:
             detail="Invalid due_date format. Use YYYY-MM-DD or ISO format"
         )
 
-def _create_single_assignment(db: Session, roadmap_id: str, assigned_by: str, assigned_to: str, due_date: datetime) -> Assignment:
+def _create_single_assignment(db: Session, roadmap_id: int, assigned_by: str, assigned_to: str, due_date: datetime) -> Assignment:
 
     assignment = Assignment(
-        id=str(uuid.uuid4()),
         roadmap_id=roadmap_id,
         assigned_by=assigned_by,
         assigned_to=assigned_to,
         due_date=due_date,
-        created_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc)
     )
     db.add(assignment)
     db.flush()
@@ -120,6 +119,7 @@ def create_assignments(
                     db, assignment_data.roadmap_id, current_user.id, user_id, due_date
                 )
                 created_assignments.append(assignment)
+                auto_enroll_user_in_roadmap(db, user_id, assignment_data.roadmap_id)
                 logger.info(f"Assignment created: {assignment.id} - User {current_user.id} assigned roadmap {assignment_data.roadmap_id} to user {user_id}")
                 
             except Exception as e:
@@ -141,7 +141,7 @@ def create_assignments(
 @router.get("/assignments/count")
 def get_assignments_count(db: Session = Depends(get_db)):
 
-    from sqlalchemy import func, text
+    from sqlalchemy import func
     
     # Total assignments
     total_count = db.query(Assignment).count()
@@ -187,27 +187,6 @@ def get_assignments_count(db: Session = Depends(get_db)):
             "without_due_date": without_due_date
         }
     }
-#Need to think of this , kept here for future implementation :)
-# @router.get("/assignments/user/{user_id}/count")  
-# def get_user_assignment_count(
-#     user_id: str,
-#     db: Session = Depends(get_db),
-#     current_user: User = Depends(get_current_user)
-# ):
-#     """Get assignment count for specific user"""
-    
-#     # Count assignments received by this user
-#     received_count = db.query(Assignment).filter(Assignment.assigned_to == user_id).count()
-    
-#     # Count assignments created by this user (if they're a manager)
-#     created_count = db.query(Assignment).filter(Assignment.assigned_by == user_id).count()
-    
-#     return {
-#         "user_id": user_id,
-#         "assignments_received": received_count,
-#         "assignments_created": created_count,
-#         "total_involved": received_count + created_count
-#     }
 
 @router.get("/assignments/roadmap/{roadmap_id}/count")
 def get_roadmap_assignment_count(
@@ -217,7 +196,6 @@ def get_roadmap_assignment_count(
 ):
     """Get assignment count for specific roadmap"""
     
-    # Verify roadmap exists
     roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
     if not roadmap:
         raise HTTPException(
@@ -227,7 +205,6 @@ def get_roadmap_assignment_count(
     
     assignment_count = db.query(Assignment).filter(Assignment.roadmap_id == roadmap_id).count()
     
-    # Get unique assigners and assignees for this roadmap
     assigners = db.query(Assignment.assigned_by).filter(Assignment.roadmap_id == roadmap_id).distinct().all()
     assignees = db.query(Assignment.assigned_to).filter(Assignment.roadmap_id == roadmap_id).distinct().all()
     

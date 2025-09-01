@@ -20,7 +20,7 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 @router.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
     try:
-        register_user(db, user.name, user.email, user.password, user.role)
+        register_user(db, user.user_id, user.name, user.email, user.password, user.role, user.manager_id)
         return {"message": "User registered successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
