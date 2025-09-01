@@ -120,7 +120,6 @@ def create_assignments(
                 )
                 created_assignments.append(assignment)
                 auto_enroll_user_in_roadmap(db, user_id, assignment_data.roadmap_id)
-                logger.info(f"Assignment created: {assignment.id} - User {current_user.id} assigned roadmap {assignment_data.roadmap_id} to user {user_id}")
                 
             except Exception as e:
                 failed_assignments.append({"user_id": user_id, "error": str(e)})

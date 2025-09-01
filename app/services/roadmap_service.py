@@ -1,32 +1,28 @@
 # --------------------------------------------------
 # roadmap_service.py
-# Handles roadmap creation, topic explanations, and progress tracking.
-#
-# - create_roadmap_with_llm:
-#     Creates a roadmap, generating milestones/topics via LLM.
-#     Falls back to a basic structure if JSON parsing fails.
-#
-# - get_topic_explanation:
-#     Returns or generates (via LLM) a Markdown explanation for a topic.
-#
-# - update_progress:
-#     Creates/updates a user's topic progress, tracking start/completion times.
-#
-# Uses:
-# - SQLAlchemy models: Roadmap, Milestone, Topic, UserProgress
-# - Enums: RoadmapStatus, ProgressStatus
-# - call_llm for AI-generated content
+# Enhanced roadmap service with better error handling and LLM integration
 # --------------------------------------------------
+
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Dict, Optional, List
 
 from sqlalchemy.orm import Session, joinedload
 from app.models.roadmap import Roadmap, Milestone, Topic, UserProgress, RoadmapStatus, ProgressStatus
 from app.schemas.roadmap import RoadmapCreate
-from app.services.llm_client import call_llm
-from app.services.roadmap_prompts import CREATE_ROADMAP_PROMPT, TOPIC_EXPLANATION_PROMPT
-import json
-from datetime import datetime, timezone
+from app.services.llm_client import call_llm_with_retry, call_llm_with_json_validation, LLMClientError
+from app.services.roadmap_prompts import (
+    CREATE_ROADMAP_PROMPT, 
+    TOPIC_EXPLANATION_PROMPT, 
+    GENERATE_TOPIC_SOURCES_PROMPT,
+    ENHANCE_EXPLANATION_PROMPT,
+    CONTEXT_AWARE_EXPLANATION_PROMPT
+)
 
-def create_roadmap_with_llm(db: Session, roadmap_data: dict):
+logger = logging.getLogger(__name__)
+
+def create_roadmap_with_llm(db: Session, roadmap_data: dict) -> Roadmap:
 
     roadmap = Roadmap(
     creator_id=roadmap_data["creator_id"],
@@ -41,6 +37,7 @@ def create_roadmap_with_llm(db: Session, roadmap_data: dict):
     db.commit()
     db.refresh(roadmap)
     milestone_order_counter = 1
+    all_topics = []
 
     for interest in roadmap_data["interests"]:
         timeline = roadmap_data["timelines"].get(interest, "7 days")
@@ -51,13 +48,13 @@ def create_roadmap_with_llm(db: Session, roadmap_data: dict):
             skillLevel=roadmap_data["level"]
         )
 
-        llm_response = call_llm(prompt)
-
         try:
+            llm_response = call_llm_with_json_validation(prompt, max_retries=3)
             roadmap_structure = json.loads(llm_response)
 
-            for milestone_data in roadmap_structure["milestones"]:
-                clean_name = milestone_data["name"].strip()
+            milestones_data = roadmap_structure.get("milestones", [])         
+            for milestone_data in milestones_data:
+                clean_name = milestone_data.get("name", f"Learning {interest}").strip()
                 if clean_name.lower().startswith("milestone "):
                     parts = clean_name.split(":", 1)
                     if len(parts) > 1:
@@ -66,27 +63,37 @@ def create_roadmap_with_llm(db: Session, roadmap_data: dict):
                 milestone = Milestone(
                     roadmap_id=roadmap.id,
                     name=f"Milestone {milestone_order_counter}: {clean_name}",
-                    order=milestone_order_counter
+                    description=milestone_data.get("description", ""),
+                    estimated_duration=milestone_data.get("estimated_duration", timeline),
+                    order_index=milestone_order_counter
                 )
                 milestone_order_counter += 1
                 db.add(milestone)
                 db.flush()
 
-                for topic_name in milestone_data["topics"]:
+                topic_order_counter = 1
+                topics_list = milestone_data.get("topics", [f"Learn {interest}"])
+                
+                for topic_name in topics_list:
                     topic = Topic(
                         milestone_id=milestone.id,
-                        name=topic_name
+                        name=topic_name,
+                        order_index=topic_order_counter
                     )
+                    topic_order_counter += 1
                     db.add(topic)
+                    db.flush()
+                    all_topics.append(topic)        
 
-            db.commit()
 
-        except json.JSONDecodeError:
-
+        except (json.JSONDecodeError, LLMClientError) as e:
+            logger.warning(f"LLM failed for '{interest}', using fallback: {type(e).__name__}")
             milestone = Milestone(
                 roadmap_id=roadmap.id,
-                name=f"Milestone {milestone_order_counter}: {interest} Fundamentals",
-                order=milestone_order_counter
+                name=f"Milestone {milestone_order_counter}: Learn {interest}",
+                description=f"Comprehensive learning path for {interest}",
+                estimated_duration=timeline,
+                order_index=milestone_order_counter
             )
             milestone_order_counter += 1
             db.add(milestone)
@@ -94,34 +101,119 @@ def create_roadmap_with_llm(db: Session, roadmap_data: dict):
 
             topic = Topic(
                 milestone_id=milestone.id,
-                name=f"Basic {interest}"
+                name=f"Master {interest} Fundamentals",
+                order_index=1
             )
             db.add(topic)
-            db.commit()
+            db.flush()
+            all_topics.append(topic)
+
+    for topic in all_topics:
+        progress = UserProgress(
+            user_id=roadmap_data["creator_id"],
+            topic_id=topic.id,
+            status=ProgressStatus.not_started
+        )
+        db.add(progress)
 
     roadmap.status = RoadmapStatus.ready
     db.commit()
-
     return roadmap
 
-def get_topic_explanation(db: Session, topic_id: str) -> str:
+def get_topic_explanation(db: Session, topic_id: str, user_context: Optional[Dict] = None) -> Optional[str]:
     topic = db.query(Topic).filter(Topic.id == topic_id).first()
     if not topic:
-        raise ValueError("Topic not found")
+        return None
 
-    if topic.explanation_md:
+    if topic.explanation_md and not user_context:
+        return topic.explanation_md
+    
+    try:
+        if user_context:
+
+            prompt = CONTEXT_AWARE_EXPLANATION_PROMPT.format(
+                topic_name=topic.name,
+                skill_level=user_context.get("skill_level", "beginner"),
+                learning_goals=user_context.get("learning_goals", "general understanding"),
+                time_available=user_context.get("time_available", "flexible"),
+                completed_topics=", ".join(user_context.get("completed_topics", []))
+            )
+        else:
+            prompt = TOPIC_EXPLANATION_PROMPT.format(topic_name=topic.name)
+
+        response = call_llm_with_json_validation(prompt, max_retries=2)
+        explanation_data = json.loads(response)
+        
+        explanation_content = explanation_data.get("content", f"# {topic.name}\n\nContent generation failed.")
+        
+        if not user_context:
+            topic.explanation_md = explanation_content
+            db.commit()
+        
+        return explanation_content
+        
+    except (LLMClientError, json.JSONDecodeError) as e:
+        
+        fallback = f"""# {topic.name}
+
+## Overview
+This topic covers the fundamentals of {topic.name}.
+
+## What You'll Learn
+- Core concepts and principles
+- Practical applications
+- Best practices
+
+## Getting Started
+Begin by understanding the basic concepts and gradually work through practical examples.
+
+*Note: Detailed explanation generation is temporarily unavailable. Please check back later for enhanced content.*
+"""
+        return fallback
+
+def enhance_topic_explanation(db: Session, topic_id: str) -> Optional[str]:
+    """Enhance existing topic explanation with better content"""
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic or not topic.explanation_md:
+        logger.warning(f"Topic or explanation not found for enhancement: {topic_id}")
+        return None
+    
+    try:
+        prompt = ENHANCE_EXPLANATION_PROMPT.format(
+            current_explanation=topic.explanation_md,
+            topic_name=topic.name
+        )
+        
+        response = call_llm_with_json_validation(prompt)
+        enhancement_data = json.loads(response)
+        
+        enhanced_content = enhancement_data.get("enhanced_content", topic.explanation_md)
+        
+        topic.explanation_md = enhanced_content
+        db.commit()
+        return enhanced_content
+        
+    except (LLMClientError, json.JSONDecodeError) as e:
+        logger.error(f"Failed to enhance explanation for topic {topic.name}: {e}")
         return topic.explanation_md
 
-    prompt = TOPIC_EXPLANATION_PROMPT.format(topic_name=topic.name)
+def generate_topic_sources(db: Session, topic_id: str) -> List[Dict]:
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic:
+        return []
+    
+    try:
+        prompt = GENERATE_TOPIC_SOURCES_PROMPT.format(topic_name=topic.name)
+        response = call_llm_with_json_validation(prompt)
+        sources_data = json.loads(response)
+        
+        return sources_data
+        
+    except (LLMClientError, json.JSONDecodeError) as e:
+        logger.error(f"Failed to generate sources for topic {topic.name}: {e}")
+        return []
 
-    explanation = call_llm(prompt)
-
-    topic.explanation_md = explanation
-    db.commit()
-
-    return explanation
-
-def update_progress(db: Session, user_id: str, topic_id: str, status: str):
+def update_progress(db: Session, user_id: str, topic_id: str, status: str) -> UserProgress:
     progress = db.query(UserProgress).filter(
         UserProgress.user_id == user_id,
         UserProgress.topic_id == topic_id
@@ -134,23 +226,34 @@ def update_progress(db: Session, user_id: str, topic_id: str, status: str):
             status=ProgressStatus(status)
         )
         db.add(progress)
-    else:
-        progress.status = ProgressStatus(status)
-
-    if status == "completed":
+    
+    old_status = progress.status.value if progress.status else "not_started"
+    new_status = ProgressStatus(status)
+    
+    if status == "not_started":
+        progress.status = ProgressStatus.not_started
+        progress.started_at = None
+        progress.completed_at = None
+    elif status == "in_progress":
+        progress.status = ProgressStatus.in_progress
+        if not progress.started_at:
+            progress.started_at = datetime.now(timezone.utc)
+        progress.completed_at = None
+    elif status == "completed":
+        progress.status = ProgressStatus.completed
+        if not progress.started_at:
+            progress.started_at = datetime.now(timezone.utc)
         progress.completed_at = datetime.now(timezone.utc)
-    elif status == "in_progress" and not progress.started_at:
-        progress.started_at = datetime.now(timezone.utc)
-
+    progress.last_accessed = datetime.now(timezone.utc)
     db.commit()
     return progress
 
-def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str):
+def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str) -> Optional[Dict]:
     
     roadmap = (
         db.query(Roadmap)
         .options(
-             joinedload(Roadmap.milestones)
+            joinedload(Roadmap.milestones)
             .joinedload(Milestone.topics)
             .joinedload(Topic.progress)
         )
@@ -175,17 +278,20 @@ def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str):
     
     roadmap_data = {
         'roadmap': roadmap,
-        'milestones': []
+        'milestones': [],
+        'metadata': roadmap.metadata or {}
     }
     
     total_topics = 0
     completed_topics = 0
+    in_progress_topics = 0
     total_milestones = len(roadmap.milestones)
     completed_milestones = 0
     
     for milestone in roadmap.milestones:
         milestone_topics = []
         milestone_completed = 0
+        milestone_in_progress = 0
         milestone_total = len(milestone.topics)
         
         for topic in milestone.topics:
@@ -194,10 +300,18 @@ def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str):
             
             if progress:
                 topic_status = progress.status.value
-                topic_progress_percentage = 100 if topic_status == "completed" else 50 if topic_status == "in_progress" else 0
+                topic_progress_percentage = (
+                    100 if topic_status == "completed" 
+                    else 50 if topic_status == "in_progress" 
+                    else 0
+                )
+                
                 if topic_status == "completed":
                     completed_topics += 1
                     milestone_completed += 1
+                elif topic_status == "in_progress":
+                    in_progress_topics += 1
+                    milestone_in_progress += 1
             else:
                 topic_status = "not_started"
                 topic_progress_percentage = 0
@@ -209,39 +323,127 @@ def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str):
                     'status': topic_status,
                     'started_at': progress.started_at if progress else None,
                     'completed_at': progress.completed_at if progress else None,
-                    'progress_percentage': topic_progress_percentage
+                    'last_accessed': progress.last_accessed if progress else None,
+                    'progress_percentage': topic_progress_percentage,
+                    'metadata': progress.metadata if progress else {}
                 }
             }
             milestone_topics.append(topic_data)
         
         milestone_progress_percentage = int((milestone_completed / milestone_total * 100)) if milestone_total > 0 else 0
-        milestone_status = "completed" if milestone_completed == milestone_total else "in_progress" if milestone_completed > 0 else "not_started"
         
-        if milestone_status == "completed":
+        if milestone_completed == milestone_total:
+            milestone_status = "completed"
             completed_milestones += 1
+        elif milestone_completed > 0 or milestone_in_progress > 0:
+            milestone_status = "in_progress"
+        else:
+            milestone_status = "not_started"
         
         milestone_data = {
             'milestone': milestone,
             'topics': milestone_topics,
             'progress': {
-                'total_topics': milestone_total,
-                'completed_topics': milestone_completed,
+                'status': milestone_status,
                 'progress_percentage': milestone_progress_percentage,
-                'status': milestone_status
+                'completed_topics': milestone_completed,
+                'total_topics': milestone_total
             }
         }
         roadmap_data['milestones'].append(milestone_data)
     
     roadmap_progress_percentage = int((completed_topics / total_topics * 100)) if total_topics > 0 else 0
-    roadmap_status = "completed" if completed_topics == total_topics else "in_progress" if completed_topics > 0 else "not_started"
+    
+    if completed_topics == total_topics:
+        roadmap_status = "completed"
+    elif completed_topics > 0 or in_progress_topics > 0:
+        roadmap_status = "in_progress"
+    else:
+        roadmap_status = "not_started"
     
     roadmap_data['progress'] = {
         'total_milestones': total_milestones,
         'completed_milestones': completed_milestones,
         'total_topics': total_topics,
         'completed_topics': completed_topics,
+        'in_progress_topics': in_progress_topics,
         'progress_percentage': roadmap_progress_percentage,
         'status': roadmap_status
     }
     
     return roadmap_data
+
+def get_user_learning_context(db: Session, user_id: str, topic_id: str) -> Dict:
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic:
+        return {}
+    
+    milestone = db.query(Milestone).filter(Milestone.id == topic.milestone_id).first()
+    if not milestone:
+        return {}
+    
+    roadmap_data = get_roadmap_with_progress(db, milestone.roadmap_id, user_id)
+    if not roadmap_data:
+        return {}
+    
+    completed_topics = []
+    skill_indicators = []
+    
+    for milestone_data in roadmap_data['milestones']:
+        for topic_data in milestone_data['topics']:
+            if topic_data['progress']['status'] == 'completed':
+                completed_topics.append(topic_data['topic'].name)
+            if topic_data['progress']['status'] in ['completed', 'in_progress']:
+                skill_indicators.append(topic_data['topic'].name)
+    
+    total_topics = roadmap_data['progress']['total_topics']
+    completed_count = len(completed_topics)
+    
+    if completed_count == 0:
+        skill_level = "beginner"
+    elif completed_count < total_topics * 0.3:
+        skill_level = "beginner"
+    elif completed_count < total_topics * 0.7:
+        skill_level = "intermediate"
+    else:
+        skill_level = "advanced"
+    
+    return {
+        "skill_level": skill_level,
+        "completed_topics": completed_topics,
+        "learning_goals": roadmap_data['roadmap'].interests,
+        "time_available": "flexible" 
+    }
+
+def auto_enroll_user_in_roadmap(db: Session, user_id: str, roadmap_id: str) -> int:
+
+    topic_rows = (
+        db.query(Topic.id)
+        .join(Milestone, Milestone.id == Topic.milestone_id)
+        .filter(Milestone.roadmap_id == roadmap_id)
+        .all()
+    )
+
+    topic_ids = {row[0] for row in topic_rows}
+    if not topic_ids:
+        logger.warning(f"No topics in roadmap {roadmap_id}")
+        return 0
+
+    existing_rows = (
+        db.query(UserProgress.topic_id)
+        .filter(UserProgress.user_id == user_id, UserProgress.topic_id.in_(topic_ids))
+        .all()
+    )
+    existing_topic_ids = {row[0] for row in existing_rows}
+
+    created_count = 0
+    for topic_id in (topic_ids - existing_topic_ids):
+        db.add(
+            UserProgress(
+                user_id=user_id,
+                topic_id=topic_id,
+                status=ProgressStatus.not_started,
+            )
+        )
+        created_count += 1
+    return created_count
