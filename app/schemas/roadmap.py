@@ -84,6 +84,9 @@ class DashboardEnrollmentResponse(BaseModel):
     user_id: str
     enrolled_at: datetime
     total_topics: int
+    completed_topics: int
+    progress_percentage: int
+    status: str
 
 class AssignmentCreate(BaseModel):
     roadmap_id: str
