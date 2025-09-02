@@ -228,7 +228,7 @@ def list_dashboard_enrollments(
     """
     
     # Get current user's role value
-    current_role = getattr(current_user.role, 'value', current_user.role)
+    current_role = current_user.role.value
     
     # Determine which user(s) to get enrollment data for based on role and query params
     target_user_ids = []
@@ -244,8 +244,6 @@ def list_dashboard_enrollments(
         
     elif current_role == UserRole.manager.value:
         # Managers can see their own progress AND their reportees' progress
-        reportee_query = db.query(User).filter(User.manager_id == current_user.id)
-        
         if manager_id:
             # If manager_id is specified, ensure it matches current user
             if manager_id != current_user.id:
@@ -259,7 +257,10 @@ def list_dashboard_enrollments(
             if user_id == current_user.id:
                 target_user_ids = [user_id]
             else:
-                reportee = reportee_query.filter(User.id == user_id).first()
+                reportee = db.query(User).filter(
+                    User.manager_id == current_user.id,
+                    User.id == user_id
+                ).first()
                 if not reportee:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
@@ -268,7 +269,7 @@ def list_dashboard_enrollments(
                 target_user_ids = [user_id]
         else:
             # Get all reportees AND include the manager themselves
-            reportees = reportee_query.all()
+            reportees = db.query(User).filter(User.manager_id == current_user.id).all()
             target_user_ids = [current_user.id] + [reportee.id for reportee in reportees]
             
     elif current_role == UserRole.superadmin.value:
@@ -354,34 +355,40 @@ def list_dashboard_enrollments(
         )
         
         for enrolled_user_id in enrolled_user_ids:
-            enrolled_at = roadmap.created_at
+            # Determine enrolled_at with consistent logic:
+            # 1. If assigned, use assignment creation date
+            # 2. If creator, use roadmap creation date
+            enrolled_at = None
             
-            progress_rows = (
-                db.query(UserProgress)
-                .join(Topic, Topic.id == UserProgress.topic_id)
-                .join(Milestone, Milestone.id == Topic.milestone_id)
-                .filter(
-                    UserProgress.user_id == enrolled_user_id, 
-                    Milestone.roadmap_id == roadmap_id
-                )
-                .all()
-            )
+            # Check if user was assigned to this roadmap
+            assignment = db.query(Assignment).filter(
+                Assignment.roadmap_id == roadmap_id,
+                Assignment.assigned_to == enrolled_user_id
+            ).first()
             
-            started_times = [p.started_at for p in progress_rows if p.started_at is not None]
-            if started_times:
-                # Use earliest progress start time if available
-                enrolled_at = min(started_times)
+            if assignment:
+                enrolled_at = assignment.created_at
+            elif roadmap.creator_id == enrolled_user_id:
+                enrolled_at = roadmap.created_at
             else:
-                assignment = db.query(Assignment).filter(
-                    Assignment.roadmap_id == roadmap_id,
-                    Assignment.assigned_to == enrolled_user_id
-                ).first()
-                if assignment:
-                    enrolled_at = assignment.created_at
+                # User has progress but no assignment and isn't creator
+                # Use earliest progress start time
+                progress_rows = (
+                    db.query(UserProgress)
+                    .join(Topic, Topic.id == UserProgress.topic_id)
+                    .join(Milestone, Milestone.id == Topic.milestone_id)
+                    .filter(
+                        UserProgress.user_id == enrolled_user_id, 
+                        Milestone.roadmap_id == roadmap_id
+                    )
+                    .all()
+                )
+                
+                started_times = [p.started_at for p in progress_rows if p.started_at is not None]
+                if started_times:
+                    enrolled_at = min(started_times)
                 else:
-                    # Check if they're the creator (use roadmap creation date)
-                    if roadmap.creator_id == enrolled_user_id:
-                        enrolled_at = roadmap.created_at
+                    enrolled_at = roadmap.created_at
 
             # Calculate progress information for this user and roadmap
             # Get all topic IDs for this roadmap
@@ -400,7 +407,7 @@ def list_dashboard_enrollments(
             ).all()
             
             # Calculate progress statistics
-            completed_topics = sum(1 for p in user_progress_data if p.status.value == "completed")
+            completed_topics = sum(1 for p in user_progress_data if p.status.value == ProgressStatus.completed)
             in_progress_topics = sum(1 for p in user_progress_data if p.status.value == "in_progress")
             
             if total_topics > 0:
