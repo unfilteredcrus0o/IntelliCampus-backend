@@ -22,7 +22,7 @@ Features:
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
 from datetime import datetime
 
 class RoadmapCreate(BaseModel):
@@ -84,6 +84,9 @@ class DashboardEnrollmentResponse(BaseModel):
     user_id: str
     enrolled_at: datetime
     total_topics: int
+    completed_topics: int
+    progress_percentage: int
+    status: Literal["not_started", "in_progress", "completed"]
 
 class AssignmentCreate(BaseModel):
     roadmap_id: str
