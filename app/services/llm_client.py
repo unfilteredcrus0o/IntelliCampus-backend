@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
 
 class LLMClientError(Exception):
@@ -99,7 +99,7 @@ def call_groq_enhanced(prompt: str, temperature: float = 0.7, max_tokens: Option
             "https://api.groq.com/openai/v1/chat/completions",
             headers=headers,
             json=data,
-            timeout=60
+            timeout=10
         )
         
         if response.status_code == 401:
