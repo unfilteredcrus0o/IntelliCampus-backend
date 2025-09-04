@@ -28,6 +28,7 @@ from app.schemas.roadmap import (
     MilestoneProgressResponse, RoadmapProgressResponse, 
     DashboardRoadmapResponse, DashboardEnrollmentResponse
 )
+from app.services.course_validator import validate_course_input, create_custom_course_roadmap_data
 from app.services.roadmap_service import (
     create_roadmap_with_llm,
     get_topic_explanation,
@@ -161,14 +162,48 @@ def create_roadmap(
     logger = logging.getLogger(__name__)
 
     logger.info(f"User {current_user.id} ({current_user.role.value}) creating roadmap: {roadmap_data.title}")
+    logger.info(f"Selected topics for validation: {roadmap_data.selectedTopics}")
+
+    validation_result = validate_course_input(roadmap_data.selectedTopics)
+
+    if validation_result["action"] == "error":
+        logger.warning(f"Invalid course input rejected: {roadmap_data.selectedTopics} - {validation_result['reason']}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "We don't recognize this course. Please enter a valid topic.",
+                "invalid_topics": validation_result["invalid_topics"],
+                "suggested_topics": validation_result.get("suggested_topics", []),
+                "reason": validation_result["reason"]
+            }
+        )
     
-    roadmap_input = {
-        "creator_id": current_user.id,
-        "title": roadmap_data.title,
-        "level": roadmap_data.skillLevel,
-        "interests": roadmap_data.selectedTopics,
-        "timelines": {topic: roadmap_data.duration for topic in roadmap_data.selectedTopics}
-    }
+    elif validation_result["action"] == "fallback_custom":
+        logger.info(f"Falling back to Custom Course for input: {roadmap_data.selectedTopics}")
+        roadmap_input = create_custom_course_roadmap_data(
+            roadmap_data.selectedTopics, 
+            roadmap_data.skillLevel, 
+            roadmap_data.duration
+        )
+        roadmap_input["creator_id"] = current_user.id
+        
+        if roadmap_data.title and roadmap_data.title.strip():
+            roadmap_input["title"] = roadmap_data.title
+            
+    elif validation_result["action"] == "proceed":
+
+        valid_topics = validation_result["valid_topics"]
+        if validation_result["invalid_topics"]:
+            logger.warning(f"Filtering out invalid topics: {[item['topic'] for item in validation_result['invalid_topics']]}")
+        
+        logger.info(f"Proceeding with valid topics: {valid_topics}")
+        roadmap_input = {
+            "creator_id": current_user.id,
+            "title": roadmap_data.title,
+            "level": roadmap_data.skillLevel,
+            "interests": valid_topics,
+            "timelines": {topic: roadmap_data.duration for topic in valid_topics}
+        }
     
     roadmap = create_roadmap_with_llm(db, roadmap_input)
 
@@ -180,10 +215,18 @@ def create_roadmap(
         )
         logger.info(f"Created {auto_assignments_count} auto-assignments for roadmap {roadmap.id}")
     
-    return {
+    response = {
         "roadmap_id": roadmap.id,
-        "auto_assigned_to_users": auto_assignments_count if current_user.role == UserRole.superadmin else 0
+        "auto_assigned_to_users": auto_assignments_count if current_user.role == UserRole.superadmin else 0,
+        "validation_result": {
+            "action_taken": validation_result["action"],
+            "original_topics": roadmap_data.selectedTopics,
+            "processed_topics": roadmap_input.get("interests", []),
+            "filtered_invalid_topics": [item["topic"] for item in validation_result.get("invalid_topics", [])]
+        }
     }
+    
+    return response
 
 @router.get("/roadmap/{roadmap_id}/progress", response_model=RoadmapResponse)
 def get_roadmap_progress(

@@ -82,7 +82,7 @@ def get_all_users_for_assignment(
             detail="Only superadmins can access all users for assignment"
         )
     
-    users = db.query(User).all()
+    users = db.query(User).filter(User.role != ModelUserRole.superadmin).all()
     
     return {
         "total_users": len(users),
