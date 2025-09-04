@@ -82,6 +82,7 @@ class DashboardRoadmapResponse(BaseModel):
 class DashboardEnrollmentResponse(BaseModel):
     roadmap_id: str
     user_id: str
+    role: str
     enrolled_at: datetime
     total_topics: int
     completed_topics: int

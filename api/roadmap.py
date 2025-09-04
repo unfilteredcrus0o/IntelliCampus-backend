@@ -423,15 +423,19 @@ def list_dashboard_enrollments(
             else:
                 status = "not_started"
 
+            user = db.query(User).filter(User.id == enrolled_user_id).first()
+            user_role = user.role.value if user else "unknown"
+            
         responses.append(DashboardEnrollmentResponse(
             roadmap_id=roadmap_id,
             user_id=enrolled_user_id,
+          role=user_role,
           enrolled_at=enrolled_at,
                 total_topics=total_topics,
                 completed_topics=completed_topics,
                 progress_percentage=progress_percentage,
                 status=status
-        ))
+            ))
     return responses
 
 @router.post("/roadmap/{roadmap_id}/enroll")
