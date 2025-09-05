@@ -5,13 +5,18 @@
 
 import json
 import logging
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Optional, List
+from functools import lru_cache
 
 from sqlalchemy.orm import Session, joinedload
 from app.models.roadmap import Roadmap, Milestone, Topic, UserProgress, RoadmapStatus, ProgressStatus
 from app.schemas.roadmap import RoadmapCreate
-from app.services.llm_client import call_llm_with_retry, call_llm_with_json_validation, LLMClientError
+from app.services.llm_client import (
+    call_llm_with_retry, call_llm_with_json_validation, LLMClientError,
+    call_llm_batch_sync, create_optimized_roadmap_prompt, create_fast_explanation_prompt
+)
 from app.services.roadmap_prompts import (
     CREATE_ROADMAP_TITLE_PROMPT,
     CREATE_ROADMAP_PROMPT, 
@@ -22,6 +27,19 @@ from app.services.roadmap_prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+_explanation_cache = {}
+_roadmap_cache = {}
+
+def get_cache_key(data: str) -> str:
+    """Generate cache key from data"""
+    return hashlib.md5(data.encode()).hexdigest()
+
+@lru_cache(maxsize=100)
+def get_cached_explanation(topic_name: str, skill_level: str = "beginner") -> Optional[str]:
+    """Cache topic explanations to avoid regenerating them"""
+    cache_key = f"{topic_name}_{skill_level}"
+    return _explanation_cache.get(cache_key)
 
 def generate_roadmap_title_with_llm(interests: List[str], skill_level: str, duration: str) -> str:
     """
@@ -69,7 +87,10 @@ def generate_roadmap_title_with_llm(interests: List[str], skill_level: str, dura
         else:
             return f"{skill_level.title()} Learning Track"
 
-def create_roadmap_with_llm(db: Session, roadmap_data: dict) -> Roadmap:
+def create_roadmap_with_llm_fast(db: Session, roadmap_data: dict) -> Roadmap:
+    """Fast roadmap creation with batch processing and caching"""
+    start_time = datetime.now()
+    
     title = roadmap_data.get("title")
     if not title or title.strip() == "":
         interests = roadmap_data.get("interests", [])
@@ -80,9 +101,13 @@ def create_roadmap_with_llm(db: Session, roadmap_data: dict) -> Roadmap:
             duration_str = next(iter(duration.values()))
         else:
             duration_str = "4 weeks"
-            
-        title = generate_roadmap_title_with_llm(interests, skill_level, duration_str)
+        
+        if len(interests) == 1:
+            title = f"{skill_level.title()} {interests[0]} Mastery Track"
+        else:
+            title = f"{skill_level.title()} Multi-Tech Learning Path"
 
+    # Create roadmap immediately
     roadmap = Roadmap(
         creator_id=roadmap_data["creator_id"],
         title=title,
@@ -95,140 +120,217 @@ def create_roadmap_with_llm(db: Session, roadmap_data: dict) -> Roadmap:
     db.add(roadmap)
     db.commit()
     db.refresh(roadmap)
-    milestone_order_counter = 1
-    all_topics = []
 
-    for interest in roadmap_data["interests"]:
+    # Batch process all interests simultaneously
+    interests = roadmap_data["interests"]
+    skill_level = roadmap_data["level"]
+    
+    # Create optimized prompts for batch processing
+    prompts = []
+    for interest in interests:
         timeline = roadmap_data["timelines"].get(interest, "7 days")
+        prompt = create_optimized_roadmap_prompt(interest, timeline, skill_level)
+        prompts.append(prompt)
 
-        prompt = CREATE_ROADMAP_PROMPT.format(
-            selectedTopics=interest,
-            duration=timeline,
-            skillLevel=roadmap_data["level"]
-        )
+    try:
+        logger.info(f"Processing {len(prompts)} interests in batch for faster creation")
+        llm_responses = call_llm_batch_sync(prompts, temperature=0.5)  # Lower temperature for faster processing
+        
+        milestone_order_counter = 1
+        all_topics = []
+        
+        for i, (interest, llm_response) in enumerate(zip(interests, llm_responses)):
+            timeline = roadmap_data["timelines"].get(interest, "7 days")
+            
+            try:
+                if llm_response.startswith("Error:"):
+                    raise json.JSONDecodeError("Batch response error", llm_response, 0)
+                    
+                roadmap_structure = json.loads(llm_response)
+                milestones_data = roadmap_structure.get("milestones", [])
+                
+                for milestone_data in milestones_data:
+                    clean_name = milestone_data.get("name", f"Learning {interest}").strip()
+                    
+                    milestone = Milestone(
+                        roadmap_id=roadmap.id,
+                        name=f"Milestone {milestone_order_counter}: {clean_name}",
+                        description=milestone_data.get("description", ""),
+                        estimated_duration=milestone_data.get("estimated_duration", timeline),
+                        order_index=milestone_order_counter
+                    )
+                    milestone_order_counter += 1
+                    db.add(milestone)
+                    db.flush()
 
-        try:
-            llm_response = call_llm_with_json_validation(prompt, max_retries=3)
-            roadmap_structure = json.loads(llm_response)
-
-            milestones_data = roadmap_structure.get("milestones", [])         
-            for milestone_data in milestones_data:
-                clean_name = milestone_data.get("name", f"Learning {interest}").strip()
-                if clean_name.lower().startswith("milestone "):
-                    parts = clean_name.split(":", 1)
-                    if len(parts) > 1:
-                        clean_name = parts[1].strip()
-
+                    topic_order_counter = 1
+                    topics_list = milestone_data.get("topics", [f"Learn {interest}"])
+                    
+                    for topic_name in topics_list:
+                        topic = Topic(
+                            milestone_id=milestone.id,
+                            name=topic_name,
+                            order_index=topic_order_counter
+                        )
+                        topic_order_counter += 1
+                        db.add(topic)
+                        db.flush()
+                        all_topics.append(topic)
+                        
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Failed to parse LLM response for '{interest}', using fallback")
                 milestone = Milestone(
                     roadmap_id=roadmap.id,
-                    name=f"Milestone {milestone_order_counter}: {clean_name}",
-                    description=milestone_data.get("description", ""),
-                    estimated_duration=milestone_data.get("estimated_duration", timeline),
+                    name=f"Milestone {milestone_order_counter}: Learn {interest}",
+                    description=f"Comprehensive learning path for {interest}",
+                    estimated_duration=timeline,
                     order_index=milestone_order_counter
                 )
                 milestone_order_counter += 1
                 db.add(milestone)
                 db.flush()
 
-                topic_order_counter = 1
-                topics_list = milestone_data.get("topics", [f"Learn {interest}"])
-                
-                for topic_name in topics_list:
-                    topic = Topic(
-                        milestone_id=milestone.id,
-                        name=topic_name,
-                        order_index=topic_order_counter
-                    )
-                    topic_order_counter += 1
-                    db.add(topic)
-                    db.flush()
-                    all_topics.append(topic)        
+                topic = Topic(
+                    milestone_id=milestone.id,
+                    name=f"Master {interest} Fundamentals",
+                    order_index=1
+                )
+                db.add(topic)
+                db.flush()
+                all_topics.append(topic)
 
+    except Exception as e:
+        logger.error(f"Batch processing failed, falling back to sequential: {e}")
+        all_topics = _create_fallback_roadmap(db, roadmap, roadmap_data)
 
-        except (json.JSONDecodeError, LLMClientError) as e:
-            logger.warning(f"LLM failed for '{interest}', using fallback: {type(e).__name__}")
-            milestone = Milestone(
-                roadmap_id=roadmap.id,
-                name=f"Milestone {milestone_order_counter}: Learn {interest}",
-                description=f"Comprehensive learning path for {interest}",
-                estimated_duration=timeline,
-                order_index=milestone_order_counter
-            )
-            milestone_order_counter += 1
-            db.add(milestone)
-            db.flush()
+    progress_records = [
+        UserProgress(
+            user_id=roadmap_data["creator_id"],
+            topic_id=topic.id,
+            status=ProgressStatus.not_started
+        ) for topic in all_topics
+    ]
+    db.add_all(progress_records)
 
+    roadmap.status = RoadmapStatus.ready
+    db.commit()
+    
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    logger.info(f"Fast roadmap creation completed in {duration:.2f} seconds")
+    
+    return roadmap
+
+def _create_fallback_roadmap(db: Session, roadmap: Roadmap, roadmap_data: dict) -> List[Topic]:
+    """Quick fallback roadmap creation without LLM"""
+    all_topics = []
+    milestone_order_counter = 1
+    
+    for interest in roadmap_data["interests"]:
+        timeline = roadmap_data["timelines"].get(interest, "7 days")
+        
+        milestone = Milestone(
+            roadmap_id=roadmap.id,
+            name=f"Milestone {milestone_order_counter}: Master {interest}",
+            description=f"Comprehensive learning path for {interest}",
+            estimated_duration=timeline,
+            order_index=milestone_order_counter
+        )
+        milestone_order_counter += 1
+        db.add(milestone)
+        db.flush()
+
+        basic_topics = [
+            f"{interest} Fundamentals",
+            f"Practical {interest} Applications",
+            f"Advanced {interest} Concepts"
+        ]
+        
+        for i, topic_name in enumerate(basic_topics, 1):
             topic = Topic(
                 milestone_id=milestone.id,
-                name=f"Master {interest} Fundamentals",
-                order_index=1
+                name=topic_name,
+                order_index=i
             )
             db.add(topic)
             db.flush()
             all_topics.append(topic)
+    
+    return all_topics
 
-    for topic in all_topics:
-        progress = UserProgress(
-            user_id=roadmap_data["creator_id"],
-            topic_id=topic.id,
-            status=ProgressStatus.not_started
-        )
-        db.add(progress)
+def create_roadmap_with_llm(db: Session, roadmap_data: dict) -> Roadmap:
+    """Deprecated: Use create_roadmap_with_llm_fast for better performance"""
+    logger.warning("Using deprecated create_roadmap_with_llm. Consider using create_roadmap_with_llm_fast")
+    return create_roadmap_with_llm_fast(db, roadmap_data)
 
-    roadmap.status = RoadmapStatus.ready
-    db.commit()
-    return roadmap
-
-def get_topic_explanation(db: Session, topic_id: str, user_context: Optional[Dict] = None) -> Optional[str]:
+def get_topic_explanation_fast(db: Session, topic_id: str, user_context: Optional[Dict] = None) -> Optional[str]:
+    """Fast topic explanation with caching and optimized prompts"""
     topic = db.query(Topic).filter(Topic.id == topic_id).first()
     if not topic:
         return None
 
+    skill_level = user_context.get("skill_level", "beginner") if user_context else "beginner"
+    cache_key = f"{topic.name}_{skill_level}"
+    
+    if cache_key in _explanation_cache and not user_context:
+        logger.info(f"Using cached explanation for {topic.name}")
+        return _explanation_cache[cache_key]
+
     if topic.explanation_md and not user_context:
+        _explanation_cache[cache_key] = topic.explanation_md
         return topic.explanation_md
     
     try:
-        if user_context:
-
-            prompt = CONTEXT_AWARE_EXPLANATION_PROMPT.format(
-                topic_name=topic.name,
-                skill_level=user_context.get("skill_level", "beginner"),
-                learning_goals=user_context.get("learning_goals", "general understanding"),
-                time_available=user_context.get("time_available", "flexible"),
-                completed_topics=", ".join(user_context.get("completed_topics", []))
-            )
-        else:
-            prompt = TOPIC_EXPLANATION_PROMPT.format(topic_name=topic.name)
-
-        response = call_llm_with_json_validation(prompt, max_retries=2)
+        prompt = create_fast_explanation_prompt(topic.name)
+        
+        response = call_llm_with_json_validation(prompt, max_retries=1)  # Reduced retries
         explanation_data = json.loads(response)
         
         explanation_content = explanation_data.get("content", f"# {topic.name}\n\nContent generation failed.")
         
         if not user_context:
             topic.explanation_md = explanation_content
+            _explanation_cache[cache_key] = explanation_content
             db.commit()
         
         return explanation_content
         
     except (LLMClientError, json.JSONDecodeError) as e:
+        logger.warning(f"Fast explanation generation failed for {topic.name}: {e}")
         
         fallback = f"""# {topic.name}
 
 ## Overview
-This topic covers the fundamentals of {topic.name}.
+Learn the essential concepts and practical applications of {topic.name}.
 
-## What You'll Learn
-- Core concepts and principles
-- Practical applications
-- Best practices
+## Key Learning Points
+- Understand core principles and fundamentals
+- Apply knowledge through hands-on practice
+- Master best practices and common patterns
+- Build real-world skills and confidence
 
-## Getting Started
-Begin by understanding the basic concepts and gradually work through practical examples.
+## Quick Start Guide
+1. **Foundation**: Start with basic concepts
+2. **Practice**: Work through examples and exercises  
+3. **Apply**: Build small projects to reinforce learning
+4. **Expand**: Explore advanced topics and use cases
 
-*Note: Detailed explanation generation is temporarily unavailable. Please check back later for enhanced content.*
+## Next Steps
+- Complete practice exercises
+- Review related topics in your roadmap
+- Apply concepts to real projects
+
+*This is a quick-generated explanation. Detailed content will be available shortly.*
 """
+        
+        if not user_context:
+            _explanation_cache[cache_key] = fallback
+            
         return fallback
+
+def get_topic_explanation(db: Session, topic_id: str, user_context: Optional[Dict] = None) -> Optional[str]:
+    """Deprecated: Use get_topic_explanation_fast for better performance"""
+    return get_topic_explanation_fast(db, topic_id, user_context)
 
 def enhance_topic_explanation(db: Session, topic_id: str) -> Optional[str]:
     """Enhance existing topic explanation with better content"""

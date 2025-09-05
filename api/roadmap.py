@@ -30,8 +30,8 @@ from app.schemas.roadmap import (
 )
 from app.services.course_validator import validate_course_input, create_custom_course_roadmap_data
 from app.services.roadmap_service import (
-    create_roadmap_with_llm,
-    get_topic_explanation,
+    create_roadmap_with_llm_fast,
+    get_topic_explanation_fast,
     update_progress,
     get_roadmap_with_progress,
     generate_topic_sources,
@@ -219,7 +219,7 @@ def create_roadmap(
             "timelines": {topic: roadmap_data.duration for topic in valid_topics}
         }
     
-    roadmap = create_roadmap_with_llm(db, roadmap_input)
+    roadmap = create_roadmap_with_llm_fast(db, roadmap_input)
 
     auto_assignments_count = 0
     if current_user.role == UserRole.superadmin:
@@ -274,7 +274,7 @@ def get_topic_explanation_endpoint(
     current_user: User = Depends(get_current_user)
 ):
     topic = _get_topic_with_access_check(db, topic_id, current_user.id)
-    explanation = get_topic_explanation(db, topic_id)
+    explanation = get_topic_explanation_fast(db, topic_id)
     
     if not explanation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic explanation not found")
