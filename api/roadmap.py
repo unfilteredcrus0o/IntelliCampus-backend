@@ -95,7 +95,21 @@ def _get_topic_with_access_check(db: Session, topic_id: str, user_id: str) -> To
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found")
     
     roadmap = db.query(Roadmap).filter(Roadmap.id == topic.milestone.roadmap_id).first()
-    if not roadmap or roadmap.creator_id != user_id:
+    if not roadmap:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Roadmap not found")
+    
+    has_access = False
+    if roadmap.creator_id == user_id:
+        has_access = True
+    else:
+        assignment = db.query(Assignment).filter(
+            Assignment.roadmap_id == roadmap.id,
+            Assignment.assigned_to == user_id
+        ).first()
+        if assignment:
+            has_access = True
+    
+    if not has_access:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this topic")
     return topic
 
@@ -328,298 +342,227 @@ def get_roadmap_details(
 def list_dashboard_enrollments(
     user_id: Optional[str] = Query(None, description="Filter by specific user ID"),
     manager_id: Optional[str] = Query(None, description="Filter by manager ID"),
-    roadmap_id: Optional[str] = Query(None, description="Filter by specific roadmap"),
-    status_filter: Optional[str] = Query(None, description="Filter by status: not_started, in_progress, completed"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Comprehensive enrollment dashboard with role-based functionality:
-    - Employee: Only own progress and assignments
-    - Manager: All assigned courses progress + own progress with detailed assignment tracking + self-created roadmaps
-    - SuperAdmin: System-wide progress with comprehensive filtering and assignment details
+    Get enrollment data based on user role and enrollment status.
+    
+    Role-based access:
+    - Employee: only own enrollments
+    - Manager: own enrollments + enrollments of all reportees (or specific user_id if it's self or a reportee)
+    - SuperAdmin: enrollments of all users (or specific user_id if provided)
     """
-    import logging
-    logger = logging.getLogger(__name__)
     
-    logger.info(f"User {current_user.id} ({current_user.role.value}) requesting dashboard with filters: user_id={user_id}, manager_id={manager_id}, roadmap_id={roadmap_id}")
-    # Determine target users and get assignments based on role
+    # Get current user's role value
+    current_role = current_user.role.value
+    
+    # Determine which user(s) to get enrollment data for based on role and query params
     target_user_ids = []
-    assignments_data = {}
     
-    if current_user.role == UserRole.employee:
-        # Employees see their own assignments and progress
+    if current_role == UserRole.employee.value:
+        # Employees can only see their own progress
         if user_id and user_id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Employees can only view their own progress"
+                detail="Employees can only view their own enrollment progress"
             )
         target_user_ids = [current_user.id]
         
-        assignments = db.query(Assignment).filter(Assignment.assigned_to == current_user.id)
-        if roadmap_id:
-            assignments = assignments.filter(Assignment.roadmap_id == roadmap_id)
-        assignments = assignments.all()
-        
-    elif current_user.role == UserRole.manager:
-        if user_id:
-            requested_user = db.query(User).filter(User.id == user_id).first()
-            if not requested_user:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-            
-            if requested_user.manager_id == current_user.id or user_id == current_user.id:
-                target_user_ids = [user_id]
-                assignments = db.query(Assignment).filter(Assignment.assigned_to == user_id)
-            else:
+    elif current_role == UserRole.manager.value:
+        # Managers can see their own progress AND their reportees' progress
+        if manager_id:
+            # If manager_id is specified, ensure it matches current user
+            if manager_id != current_user.id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Managers can only view progress of their reportees or themselves"
+                    detail="Managers can only view progress of their own reportees"
                 )
-        else:
-            reportees = db.query(User).filter(User.manager_id == current_user.id).all()
-            target_user_ids = [user.id for user in reportees]
-            
-            target_user_ids.append(current_user.id)
-            
-            assignments = db.query(Assignment).filter(
-                Assignment.assigned_to.in_(target_user_ids)
-            )
-        
-        if roadmap_id:
-            assignments = assignments.filter(Assignment.roadmap_id == roadmap_id)
-        assignments = assignments.all()
-                
-    elif current_user.role == UserRole.superadmin:
-
-        assignments_query = db.query(Assignment)
         
         if user_id:
-            requested_user = db.query(User).filter(User.id == user_id).first()
-            if not requested_user:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-            target_user_ids = [user_id]
-            assignments_query = assignments_query.filter(Assignment.assigned_to == user_id)
-        elif manager_id:
-            reportees = db.query(User).filter(User.manager_id == manager_id).all()
-            target_user_ids = [user.id for user in reportees]
-            assignments_query = assignments_query.filter(Assignment.assigned_to.in_(target_user_ids))
+            # Check if the specified user is the manager themselves or a reportee
+            if user_id == current_user.id:
+                target_user_ids = [user_id]
+            else:
+                reportee = db.query(User).filter(
+                    User.manager_id == current_user.id,
+                    User.id == user_id
+                ).first()
+                if not reportee:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You can only view progress of yourself or your direct reportees"
+                    )
+                target_user_ids = [user_id]
         else:
-
-            assignments = assignments_query.all()
-            target_user_ids = list(set([a.assigned_to for a in assignments]))
-        
-        if roadmap_id:
-            assignments_query = assignments_query.filter(Assignment.roadmap_id == roadmap_id)
-        
-        assignments = assignments_query.all()
-    
-
-    for assignment in assignments:
-        key = (assignment.assigned_to, assignment.roadmap_id)
-        assignments_data[key] = assignment
+            # Get all reportees AND include the manager themselves
+            reportees = db.query(User).filter(User.manager_id == current_user.id).all()
+            target_user_ids = [current_user.id] + [reportee.id for reportee in reportees]
+            
+    elif current_role == UserRole.superadmin.value:
+        # SuperAdmins can see all users' progress
+        if user_id:
+            # Verify the user exists
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found"
+                )
+            target_user_ids = [user_id]
+        elif manager_id:
+            # Get all reportees of the specified manager
+            manager = db.query(User).filter(User.id == manager_id).first()
+            if not manager:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Manager not found"
+                )
+            reportees = db.query(User).filter(User.manager_id == manager_id).all()
+            target_user_ids = [reportee.id for reportee in reportees]
+        else:
+            # Get all users
+            all_users = db.query(User).all()
+            target_user_ids = [user.id for user in all_users]
     
     if not target_user_ids:
-        return []
+        return []    
     
-
-    assignment_roadmap_ids = list(set([a.roadmap_id for a in assignments]))
-    if current_user.role == UserRole.manager:
-        manager_created_roadmaps = db.query(Roadmap.id).filter(Roadmap.creator_id == current_user.id).all()
-        manager_roadmap_ids = [r.id for r in manager_created_roadmaps]
-        all_roadmap_ids = list(set(assignment_roadmap_ids + manager_roadmap_ids))
-    else:
-        all_roadmap_ids = assignment_roadmap_ids
-
-    enrollment_data = (
-        db.query(
-            Milestone.roadmap_id,
-            UserProgress.user_id,
-            UserProgress.started_at,
-            UserProgress.last_accessed,
-            UserProgress.status
+    from app.models.roadmap import Assignment
+    
+    roadmap_data = {}
+    for target_user_id in target_user_ids:
+        enrolled_roadmap_ids = set()
+        
+        # 1. Roadmaps they created
+        created_roadmap_ids = (
+            db.query(Roadmap.id)
+            .filter(Roadmap.creator_id == target_user_id)
+            .all()
         )
+        enrolled_roadmap_ids.update([row[0] for row in created_roadmap_ids])
+        
+        # 2. Roadmaps they were assigned to
+        assigned_roadmap_ids = (
+            db.query(Assignment.roadmap_id)
+            .filter(Assignment.assigned_to == target_user_id)
+            .all()
+        )
+        enrolled_roadmap_ids.update([row[0] for row in assigned_roadmap_ids])
+        
+        # 3. Roadmaps they have progress in
+        progress_roadmap_ids = (
+        db.query(Milestone.roadmap_id)
         .join(Topic, Topic.milestone_id == Milestone.id)
         .join(UserProgress, UserProgress.topic_id == Topic.id)
-        .filter(
-            UserProgress.user_id.in_(target_user_ids),
-            Milestone.roadmap_id.in_(all_roadmap_ids) if all_roadmap_ids else True
-        )
+        .filter(UserProgress.user_id == target_user_id)
+        .distinct()
         .all()
     )
-
-    user_roadmap_progress = {}
-    for roadmap_id, user_id, started_at, last_accessed, status in enrollment_data:
-        key = (user_id, roadmap_id)
-        if key not in user_roadmap_progress:
-            user_roadmap_progress[key] = {
-                'started_times': [],
-                'last_accessed_times': [],
-                'statuses': []
-            }
-        user_roadmap_progress[key]['started_times'].append(started_at)
-        user_roadmap_progress[key]['last_accessed_times'].append(last_accessed)
-        user_roadmap_progress[key]['statuses'].append(status)
-
-    unique_roadmap_ids = all_roadmap_ids
-    roadmaps = db.query(Roadmap).filter(Roadmap.id.in_(unique_roadmap_ids)).all() if unique_roadmap_ids else []
-    roadmap_lookup = {r.id: r for r in roadmaps}
+        enrolled_roadmap_ids.update([row[0] for row in progress_roadmap_ids])
+        
+        # Add to roadmap_data
+        for roadmap_id in enrolled_roadmap_ids:
+            if roadmap_id not in roadmap_data:
+                roadmap_data[roadmap_id] = []
+            roadmap_data[roadmap_id].append(target_user_id)
     
-    users = db.query(User).filter(User.id.in_(target_user_ids)).all()
-    user_lookup = {u.id: u for u in users}
-
     responses: List[DashboardEnrollmentResponse] = []
     
-    processed_roadmap_user_pairs = set()
-    
-    for assignment in assignments:
-        roadmap = roadmap_lookup.get(assignment.roadmap_id)
-        user = user_lookup.get(assignment.assigned_to)
-        assigner = db.query(User).filter(User.id == assignment.assigned_by).first()
-        
-        if not roadmap or not user:
+    for roadmap_id, enrolled_user_ids in roadmap_data.items():
+        roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+        if not roadmap:
             continue
-        processed_roadmap_user_pairs.add((user.id, roadmap.id))
             
         total_topics = (
             db.query(Topic)
             .join(Milestone, Milestone.id == Topic.milestone_id)
-            .filter(Milestone.roadmap_id == roadmap.id)
+            .filter(Milestone.roadmap_id == roadmap_id)
             .count()
         )
         
-        progress_key = (user.id, roadmap.id)
-        progress_data = user_roadmap_progress.get(progress_key)
-        
-        if progress_data:
+        for enrolled_user_id in enrolled_user_ids:
+            # Determine enrolled_at with consistent logic:
+            # 1. If assigned, use assignment creation date
+            # 2. If creator, use roadmap creation date
+            enrolled_at = None
+            
+            # Check if user was assigned to this roadmap
+            assignment = db.query(Assignment).filter(
+                Assignment.roadmap_id == roadmap_id,
+                Assignment.assigned_to == enrolled_user_id
+            ).first()
+            
+            if assignment:
+                enrolled_at = assignment.created_at
+            elif roadmap.creator_id == enrolled_user_id:
+                enrolled_at = roadmap.created_at
+            else:
+                # User has progress but no assignment and isn't creator
+                # Use earliest progress start time
+                progress_rows = (
+                    db.query(UserProgress)
+                    .join(Topic, Topic.id == UserProgress.topic_id)
+                    .join(Milestone, Milestone.id == Topic.milestone_id)
+                    .filter(
+                        UserProgress.user_id == enrolled_user_id, 
+                        Milestone.roadmap_id == roadmap_id
+                    )
+                    .all()
+                )
+                
+                started_times = [p.started_at for p in progress_rows if p.started_at is not None]
+                if started_times:
+                    enrolled_at = min(started_times)
+                else:
+                    enrolled_at = roadmap.created_at
 
-            completed_topics = len([s for s in progress_data['statuses'] if s == ProgressStatus.completed])
-            progress_percentage = int((completed_topics / total_topics * 100)) if total_topics > 0 else 0
+            # Calculate progress information for this user and roadmap
+            # Get all topic IDs for this roadmap
+            all_topic_ids = (
+                db.query(Topic.id)
+                .join(Milestone, Milestone.id == Topic.milestone_id)
+                .filter(Milestone.roadmap_id == roadmap_id)
+                .all()
+            )
+            topic_ids_list = [topic_id[0] for topic_id in all_topic_ids]
             
-            valid_start_times = [t for t in progress_data['started_times'] if t is not None]
-            valid_access_times = [t for t in progress_data['last_accessed_times'] if t is not None]
+            # Get progress data for this user
+            user_progress_data = db.query(UserProgress).filter(
+                UserProgress.user_id == enrolled_user_id,
+                UserProgress.topic_id.in_(topic_ids_list)
+            ).all()
             
-            enrolled_at = min(valid_start_times) if valid_start_times else None
-            last_accessed = max(valid_access_times) if valid_access_times else None
+            # Calculate progress statistics
+            completed_topics = sum(1 for p in user_progress_data if p.status.value == ProgressStatus.completed)
+            in_progress_topics = sum(1 for p in user_progress_data if p.status.value == "in_progress")
             
-            if progress_percentage == 100:
+            if total_topics > 0:
+                progress_percentage = int((completed_topics / total_topics) * 100)
+            else:
+                progress_percentage = 0
+            
+            # Determine overall status
+            if completed_topics == total_topics and total_topics > 0:
                 status = "completed"
-            elif valid_start_times or valid_access_times:
+            elif completed_topics > 0 or in_progress_topics > 0:
                 status = "in_progress"
             else:
                 status = "not_started"
-        else:
-            completed_topics = 0
-            progress_percentage = 0
-            enrolled_at = None
-            last_accessed = None
-            status = "not_started"
-        
-        if assignment.due_date and status != "completed" and datetime.now(timezone.utc) > assignment.due_date.replace(tzinfo=timezone.utc):
-            # Note: keeping status as is but could add overdue logic here in future (just a note ^^)
-            pass
-        
-        if status_filter and status != status_filter:
-            continue
 
+            user = db.query(User).filter(User.id == enrolled_user_id).first()
+            user_role = user.role.value if user else "unknown"
+            
         responses.append(DashboardEnrollmentResponse(
-            roadmap_id=roadmap.id,
-            roadmap_title=roadmap.title,
-            user_id=user.id,
-            user_name=user.name,
-            role=user.role.value,
-            enrolled_at=enrolled_at,
-            total_topics=total_topics,
-            completed_topics=completed_topics,
-            progress_percentage=progress_percentage,
-            last_accessed=last_accessed,
-            assignment_id=assignment.id,
-            assigned_by=assignment.assigned_by,
-            assigner_name=assigner.name if assigner else "Unknown",
-            due_date=assignment.due_date,
-            assigned_at=assignment.created_at,
-            status=status
-        ))
-
-    if current_user.role == UserRole.manager:
-
-        manager_created_roadmaps = db.query(Roadmap).filter(Roadmap.creator_id == current_user.id)
-        if roadmap_id:
-            manager_created_roadmaps = manager_created_roadmaps.filter(Roadmap.id == roadmap_id)
-        manager_created_roadmaps = manager_created_roadmaps.all()
-        
-        for roadmap in manager_created_roadmaps:
-
-            if (current_user.id, roadmap.id) in processed_roadmap_user_pairs:
-                continue
-
-            roadmap_assignments = db.query(Assignment).filter(Assignment.roadmap_id == roadmap.id).all()
-            if roadmap_assignments:
-                continue
-
-            total_topics = (
-                db.query(Topic)
-            .join(Milestone, Milestone.id == Topic.milestone_id)
-                .filter(Milestone.roadmap_id == roadmap.id)
-                .count()
-            )
-            
-            progress_key = (current_user.id, roadmap.id)
-            progress_data = user_roadmap_progress.get(progress_key)
-            
-            if progress_data:
-                completed_topics = len([s for s in progress_data['statuses'] if s == ProgressStatus.completed])
-                progress_percentage = int((completed_topics / total_topics * 100)) if total_topics > 0 else 0
-                
-                valid_start_times = [t for t in progress_data['started_times'] if t is not None]
-                valid_access_times = [t for t in progress_data['last_accessed_times'] if t is not None]
-                
-                enrolled_at = min(valid_start_times) if valid_start_times else None
-                last_accessed = max(valid_access_times) if valid_access_times else None
-                
-                if progress_percentage == 100:
-                    status = "completed"
-                elif valid_start_times or valid_access_times:
-                    status = "in_progress"
-                else:
-                    status = "not_started"
-            else:
-                completed_topics = 0
-                progress_percentage = 0
-                enrolled_at = None
-                last_accessed = None
-                status = "not_started"
-
-            # Apply status filter if provided
-            if status_filter and status != status_filter:
-                continue
-
-            responses.append(DashboardEnrollmentResponse(
-                roadmap_id=roadmap.id,
-                roadmap_title=roadmap.title,
-                user_id=current_user.id,
-                user_name=current_user.name,
-                role=current_user.role.value,
-                enrolled_at=enrolled_at,
+            roadmap_id=roadmap_id,
+            user_id=enrolled_user_id,
+          role=user_role,
+          enrolled_at=enrolled_at,
                 total_topics=total_topics,
                 completed_topics=completed_topics,
                 progress_percentage=progress_percentage,
-                last_accessed=last_accessed,
-                assignment_id=None,
-                assigned_by=None,
-                assigner_name=None,
-                due_date=None,
-                assigned_at=None,
                 status=status
             ))
-    
-    
-    responses.sort(key=lambda x: (
-        0 if x.status == "completed" else 1 if x.status == "in_progress" else 2,
-        x.user_name,
-        x.roadmap_title
-    ))
-    
-    logger.info(f"Dashboard retrieved: {len(responses)} assignments/enrollments shown")
     return responses
 
 @router.post("/roadmap/{roadmap_id}/enroll")

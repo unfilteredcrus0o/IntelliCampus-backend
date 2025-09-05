@@ -81,22 +81,14 @@ class DashboardRoadmapResponse(BaseModel):
     progress_percentage: int
 
 class DashboardEnrollmentResponse(BaseModel):
-    roadmap_id: str
-    roadmap_title: str
-    user_id: str
-    user_name: str
-    role: str
-    enrolled_at: Optional[datetime] = None
-    total_topics: int
-    completed_topics: int = 0
-    progress_percentage: int = 0
-    last_accessed: Optional[datetime] = None
-    assignment_id: Optional[int] = None
-    assigned_by: Optional[str] = None
-    assigner_name: Optional[str] = None
-    due_date: Optional[datetime] = None
-    assigned_at: Optional[datetime] = None
-    status: Literal["not_started", "in_progress", "completed", "enrolled"] = "enrolled"
+     roadmap_id: str
+     user_id: str
+     role: str
+     enrolled_at: datetime
+     total_topics: int
+     completed_topics: int
+     progress_percentage: int
+     status: Literal["not_started", "in_progress", "completed"]
 
 class AssignmentCreate(BaseModel):
     roadmap_id: str
