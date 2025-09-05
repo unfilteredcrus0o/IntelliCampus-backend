@@ -200,7 +200,7 @@ def get_my_assignments(
             assignment_list.append({
                 "assignment_id": assignment.id,
                 "roadmap_id": assignment.roadmap_id,
-                "roadmap_title": roadmap.title if roadmap else "Unknown Roadmap",
+                "roadmap_title": roadmap.title if roadmap else "Unknown Roadmap (Deleted)",
                 "assigned_by": assignment.assigned_by,
                 "assigner_name": assigner.name if assigner else "Unknown Assigner",
                 "due_date": assignment.due_date,
@@ -357,7 +357,7 @@ def get_assignment_details(
             "assignment_id": assignment.id,
             "roadmap": {
                 "id": assignment.roadmap_id,
-                "title": roadmap.title if roadmap else "Unknown Roadmap"
+                "title": roadmap.title if roadmap else "Unknown Roadmap (Deleted)"
             },
             "assigned_by": {
                 "id": assignment.assigned_by,

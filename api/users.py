@@ -27,7 +27,8 @@ def get_available_managers(db: Session = Depends(get_db)):
 @router.get("/", response_model=List[UserResponse])
 def get_employees_for_assignment(
     role: Optional[str] = Query(None, description="Filter by role"),
-    manager_id: Optional[str] = Query(None, description="Filter by manager ID (string)")
+    manager_id: Optional[str] = Query(None, description="Filter by manager ID (string)"),
+    include_all: Optional[bool] = Query(False, description="Include all users (superadmin only)")
     ,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_superadmin)
@@ -45,11 +46,16 @@ def get_employees_for_assignment(
         query = db.query(User)
         if role_filter is not None:
             query = query.filter(User.role == role_filter)
-        else:
+        elif not include_all:
             query = query.filter(User.role == ModelUserRole.employee)
         if manager_id is not None:
             query = query.filter(User.manager_id == manager_id)
     elif current_user.role == ModelUserRole.manager:
+        if include_all:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only superadmins can access all users"
+            )
         query = db.query(User).filter(
             User.role == ModelUserRole.employee,
             User.manager_id == current_user.id
@@ -64,3 +70,29 @@ def get_employees_for_assignment(
     
     employees = query.all()
     return employees
+
+@router.get("/all-for-assignment")
+def get_all_users_for_assignment(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != ModelUserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only superadmins can access all users for assignment"
+        )
+    
+    users = db.query(User).filter(User.role != ModelUserRole.superadmin).all()
+    
+    return {
+        "total_users": len(users),
+        "users": [
+            {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "role": user.role.value
+            }
+            for user in users
+        ]
+    }

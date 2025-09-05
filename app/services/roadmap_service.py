@@ -13,8 +13,9 @@ from app.models.roadmap import Roadmap, Milestone, Topic, UserProgress, RoadmapS
 from app.schemas.roadmap import RoadmapCreate
 from app.services.llm_client import call_llm_with_retry, call_llm_with_json_validation, LLMClientError
 from app.services.roadmap_prompts import (
+    CREATE_ROADMAP_TITLE_PROMPT,
     CREATE_ROADMAP_PROMPT, 
-    TOPIC_EXPLANATION_PROMPT, 
+    TOPIC_EXPLANATION_PROMPT,
     GENERATE_TOPIC_SOURCES_PROMPT,
     ENHANCE_EXPLANATION_PROMPT,
     CONTEXT_AWARE_EXPLANATION_PROMPT
@@ -22,15 +23,73 @@ from app.services.roadmap_prompts import (
 
 logger = logging.getLogger(__name__)
 
+def generate_roadmap_title_with_llm(interests: List[str], skill_level: str, duration: str) -> str:
+    """
+    Generate a professional, engaging roadmap title using LLM
+    
+    Args:
+        interests: List of topics/subjects for the roadmap
+        skill_level: The skill level (beginner, intermediate, advanced)
+        duration: Duration of the roadmap (e.g., "4 weeks", "2 months")
+    
+    Returns:
+        Generated title string, or fallback title if LLM fails
+    """
+    try:
+
+        topics_text = ", ".join(interests) if interests else "General Learning"
+
+        prompt = CREATE_ROADMAP_TITLE_PROMPT.format(
+            selectedTopics=topics_text,
+            skillLevel=skill_level,
+            duration=duration
+        )
+
+        logger.info(f"Generating title with LLM for topics: {topics_text}, level: {skill_level}")
+        generated_title = call_llm_with_retry(prompt, max_retries=2)
+
+        generated_title = generated_title.strip().strip('"\'')
+        
+        if len(generated_title) < 5 or len(generated_title) > 100:
+            raise ValueError(f"Generated title length out of bounds: {len(generated_title)}")
+            
+        logger.info(f"LLM generated title: '{generated_title}'")
+        return generated_title
+        
+    except Exception as e:
+        logger.warning(f"Failed to generate title with LLM: {str(e)}, using fallback")
+        
+        if interests:
+            if len(interests) == 1:
+                return f"{skill_level.title()} {interests[0]} Mastery"
+            elif len(interests) == 2:
+                return f"{interests[0]} & {interests[1]} {skill_level.title()} Track"
+            else:
+                return f"Multi-Tech {skill_level.title()} Bootcamp"
+        else:
+            return f"{skill_level.title()} Learning Track"
+
 def create_roadmap_with_llm(db: Session, roadmap_data: dict) -> Roadmap:
+    title = roadmap_data.get("title")
+    if not title or title.strip() == "":
+        interests = roadmap_data.get("interests", [])
+        skill_level = roadmap_data.get("level", "beginner")
+        duration = roadmap_data.get("timelines", {})
+        
+        if isinstance(duration, dict) and duration:
+            duration_str = next(iter(duration.values()))
+        else:
+            duration_str = "4 weeks"
+            
+        title = generate_roadmap_title_with_llm(interests, skill_level, duration_str)
 
     roadmap = Roadmap(
-    creator_id=roadmap_data["creator_id"],
-    title=roadmap_data.get("title", "Custom Roadmap"),
-    level=roadmap_data["level"],
-    interests=roadmap_data["interests"],
-    timelines=roadmap_data["timelines"],
-    status=RoadmapStatus.pending
+        creator_id=roadmap_data["creator_id"],
+        title=title,
+        level=roadmap_data["level"],
+        interests=roadmap_data["interests"],
+        timelines=roadmap_data["timelines"],
+        status=RoadmapStatus.pending
     )
 
     db.add(roadmap)
@@ -249,6 +308,7 @@ def update_progress(db: Session, user_id: str, topic_id: str, status: str) -> Us
     return progress
 
 def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str) -> Optional[Dict]:
+    from app.models.roadmap import Assignment
     
     roadmap = (
         db.query(Roadmap)
@@ -257,11 +317,25 @@ def get_roadmap_with_progress(db: Session, roadmap_id: str, user_id: str) -> Opt
             .joinedload(Milestone.topics)
             .joinedload(Topic.progress)
         )
-        .filter(Roadmap.id == roadmap_id, Roadmap.creator_id == user_id)
+        .filter(Roadmap.id == roadmap_id)
         .first()
     )
     
     if not roadmap:
+        return None
+    
+    has_access = False
+    if roadmap.creator_id == user_id:
+        has_access = True
+    else:
+        assignment = db.query(Assignment).filter(
+            Assignment.roadmap_id == roadmap_id,
+            Assignment.assigned_to == user_id
+        ).first()
+        if assignment:
+            has_access = True
+    
+    if not has_access:
         return None
     
     all_topic_ids = []

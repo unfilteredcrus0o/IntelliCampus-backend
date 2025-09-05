@@ -1,3 +1,27 @@
+CREATE_ROADMAP_TITLE_PROMPT = """
+You are an expert educational content creator specializing in creating engaging, professional course titles.
+
+**Task**: Generate a compelling, professional title for a learning roadmap with the following parameters:
+- **Topics**: {selectedTopics}
+- **Skill Level**: {skillLevel}
+- **Duration**: {duration}
+
+**Guidelines**:
+1. Create a title that is professional yet engaging
+2. Reflect the skill level appropriately
+3. Keep it concise but descriptive (4-8 words ideal)
+4. Avoid generic terms like "Learning Path" or "Course"
+5. Make it sound like a real professional certification or bootcamp
+
+**Examples of good titles**:
+- "Advanced Python Web Development Mastery"
+- "React & Node.js Full-Stack Bootcamp"
+- "Data Science with Machine Learning Fundamentals"
+- "DevOps Engineering Professional Track"
+
+**Output**: Return ONLY the title text, no quotes, no additional explanation.
+"""
+
 CREATE_ROADMAP_PROMPT = """
 You are an expert curriculum designer and learning strategist with deep knowledge across all educational domains.
 
