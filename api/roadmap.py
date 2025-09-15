@@ -19,6 +19,9 @@ Creator ID implementation allows any user role to create roadmaps.
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 from app.db.database import get_db
 from app.models.roadmap import Roadmap, Milestone, Topic, UserProgress, ProgressStatus, Assignment
 from app.models.user import User, UserRole
@@ -32,6 +35,7 @@ from app.services.course_validator import validate_course_input, create_custom_c
 from app.services.roadmap_service import (
     create_roadmap_with_llm_fast,
     get_topic_explanation_fast,
+    get_topic_explanation_with_metadata,
     update_progress,
     get_roadmap_with_progress,
     generate_topic_sources,
@@ -58,14 +62,14 @@ def _build_roadmap_response(roadmap_data: dict) -> RoadmapResponse:
                         status=topic_data['progress']['status'],
                         started_at=topic_data['progress'].get('started_at'),
                         completed_at=topic_data['progress'].get('completed_at'),
-                        progress_percentage=topic_data['progress'].get('progress_percentage', 0)
+                        progress_percentage=topic_data['progress'].get('progress_percentage', 0.0)
                     )
                 )
                 for topic_data in milestone_data['topics']
             ],
             progress=MilestoneProgressResponse(
                 status=milestone_data['progress']['status'],
-                progress_percentage=milestone_data['progress'].get('progress_percentage', 0)
+                progress_percentage=milestone_data['progress'].get('progress_percentage', 0.0)
             )
         )
         for milestone_data in roadmap_data['milestones']
@@ -197,7 +201,7 @@ def create_roadmap(
         roadmap_input = create_custom_course_roadmap_data(
             roadmap_data.selectedTopics, 
             roadmap_data.skillLevel, 
-            roadmap_data.duration
+            roadmap_data.duration or "flexible"
         )
         roadmap_input["creator_id"] = current_user.id
         
@@ -216,8 +220,10 @@ def create_roadmap(
             "title": roadmap_data.title,
             "level": roadmap_data.skillLevel,
             "interests": valid_topics,
-            "timelines": {topic: roadmap_data.duration for topic in valid_topics}
         }
+        
+        if roadmap_data.duration:
+            roadmap_input["timelines"] = {topic: roadmap_data.duration for topic in valid_topics}
     
     roadmap = create_roadmap_with_llm_fast(db, roadmap_input)
 
@@ -270,13 +276,34 @@ def update_topic_progress(
 @router.get("/topic/{topic_id}/explanation")
 def get_topic_explanation_endpoint(
     topic_id: str,
+    skill_level: str = "basic",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     topic = _get_topic_with_access_check(db, topic_id, current_user.id)
-    explanation = get_topic_explanation_fast(db, topic_id)
     
-    if not explanation:
+    valid_skill_levels = ["basic", "intermediate", "advanced"]
+    if skill_level not in valid_skill_levels:
+        skill_level = "basic"
+    
+    cache_key = f"{topic.name}_{skill_level}_metadata"
+    from app.services.roadmap_service import _explanation_cache
+    
+    if cache_key in _explanation_cache:
+        logger.info(f"Returning cached explanation for {topic.name}")
+        cached_data = _explanation_cache[cache_key]
+        return {
+            "explanation": cached_data["explanation"],
+            "difficulty_level": cached_data["difficulty_level"],
+            "estimated_time": cached_data["estimated_time"],
+            "prerequisites": cached_data["prerequisites"],
+            "key_concepts": cached_data["key_concepts"],
+            "learning_objectives": cached_data["learning_objectives"],
+        }
+    
+    explanation_data = get_topic_explanation_with_metadata(db, topic_id, skill_level)
+    
+    if not explanation_data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic explanation not found")
 
     try:
@@ -285,26 +312,13 @@ def get_topic_explanation_endpoint(
         # If refresh fails for any reason, fallback to re-querying
         topic = db.query(Topic).filter(Topic.id == topic_id).first()
 
-    sources = generate_topic_sources(db, topic_id)
-
-    explanation_with_sources = explanation
-    if sources:
-        lines = ["\n\n## Recommended Sources"]
-        for s in sources:
-            title = s.get("title") or s.get("url") or "Resource"
-            url = s.get("url") or ""
-            desc = s.get("description") or ""
-            lines.append(f"- [{title}]({url}) — {desc}")
-        explanation_with_sources += "\n" + "\n".join(lines)
-
     return {
-        "explanation": explanation_with_sources,
-        "difficulty_level": None,
-        "estimated_time": None,
-        "prerequisites": None,
-        "key_concepts": None,
-        "learning_objectives": None,
-        "sources": sources,
+        "explanation": explanation_data["explanation"],
+        "difficulty_level": explanation_data["difficulty_level"],
+        "estimated_time": explanation_data["estimated_time"],
+        "prerequisites": explanation_data["prerequisites"],
+        "key_concepts": explanation_data["key_concepts"],
+        "learning_objectives": explanation_data["learning_objectives"],
     }
 
 @router.get("/roadmap/user", response_model=List[DashboardRoadmapResponse])
