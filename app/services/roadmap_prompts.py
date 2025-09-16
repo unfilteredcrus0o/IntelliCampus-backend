@@ -29,22 +29,28 @@ You are an expert curriculum designer and learning strategist with deep knowledg
 
 **Your Task**: Design a progressive learning path that maximizes educational effectiveness and learner engagement.
 
+**STRICT STRUCTURE REQUIREMENTS**:
+
+**If skill level is "basic"**: Create EXACTLY 4 milestones with EXACTLY 6 topics in each milestone (24 topics total)
+**If skill level is "intermediate"**: Create EXACTLY 4 milestones with EXACTLY 5 topics in each milestone (20 topics total)  
+**If skill level is "advanced"**: Create EXACTLY 4 milestones with EXACTLY 5 topics in each milestone (20 topics total)
+
 **Guidelines by Skill Level**:
-- **Beginner**: Start with foundational concepts, use simple language, include lots of practice
-- **Intermediate**: Build on existing knowledge, introduce advanced concepts gradually  
-- **Advanced**: Focus on mastery, optimization, real-world applications, and cutting-edge developments
+- **basic**: Start with foundational concepts, use simple language, introduce foundations step by step
+- **intermediate**: Build on existing knowledge, expand into applied knowledge and deeper use cases
+- **advanced**: Focus on optimization, best practices, and complex problem-solving
 
 **Timeline Considerations**:
-- Break down the {duration} effectively across milestones
+- Break down the {duration} effectively across the 4 milestones
 - Ensure realistic pacing for the skill level
 - Include time for practice and reinforcement
 
 **Requirements**:
-1. Create 3-5 progressive milestones that build logically
-2. Each milestone should have 2-4 specific, actionable topics
+1. Create EXACTLY 4 progressive milestones that build logically
+2. Follow the exact topic count per skill level (basic: 6 topics/milestone, intermediate/advanced: 5 topics/milestone)
 3. Topics must be measurable and have clear learning outcomes
-4. Consider prerequisite relationships between topics
-5. Include both theoretical understanding and practical application
+4. Topics must build on each other in logical learning progression
+5. Ensure explanations are technical, non-generic, and topic-specific
 
 **Output Format** - Return ONLY this JSON structure:
 {{
@@ -105,7 +111,7 @@ You are a world-class educator creating premium learning content for the topic: 
 **Response Format** - Return as JSON:
 {{
   "content": "# {topic_name}\\n\\n## Why This Matters\\n\\n[Compelling introduction]\\n\\n## Understanding the Fundamentals\\n\\n[Core explanation with examples]\\n\\n## Real-World Applications\\n\\n[Practical uses and examples]\\n\\n## Step-by-Step Learning Approach\\n\\n[How to master this topic]\\n\\n## Common Challenges & Solutions\\n\\n[What learners struggle with]\\n\\n## Practice & Next Steps\\n\\n[Actionable practice suggestions]\\n\\n## Self-Check Questions\\n\\n[Questions to test understanding]",
-  "difficulty_level": "beginner|intermediate|advanced",
+  "difficulty_level": "basic|intermediate|advanced",
   "estimated_time": "realistic learning time",
   "prerequisites": ["prerequisite topic 1", "prerequisite topic 2"],
   "key_concepts": ["core concept 1", "core concept 2", "core concept 3"],
@@ -160,7 +166,7 @@ You are an expert research librarian and educational resource curator with compr
     "url": "https://complete-valid-url.com/path",
     "description": "Detailed explanation of why this source is excellent for learning {topic_name}. What specific educational value does it provide?",
     "source_type": "documentation|course|video|book|interactive|article",
-    "difficulty_level": "beginner|intermediate|advanced|mixed",
+    "difficulty_level": "basic|intermediate|advanced|mixed",
     "estimated_time": "time to complete this resource",
     "credibility_score": 8,
     "is_free": true,
@@ -310,4 +316,197 @@ You are an adaptive educational AI that personalizes learning content.
 }}
 
 Return ONLY valid JSON with content adapted specifically for this learner's context.
+"""
+
+# Roadmap Generation Prompts
+BATCH_ROADMAP_PROMPT_TEMPLATE = """You are an expert curriculum designer. Create a comprehensive learning roadmap for "{topic}" at {skill_level} level.
+
+**Requirements:**
+- Create exactly 4 milestones
+- Each milestone must have exactly {topics_per_milestone} specific, actionable topics
+- Topics must build progressively within and across milestones
+{duration_instruction}
+- Skill Level: {skill_level}
+
+**Skill Level Guidelines:**
+- basic: Start with fundamentals, use simple concepts, hands-on practice
+- intermediate: Build on existing knowledge, real-world applications, integration
+- advanced: Complex problem-solving, optimization, best practices, advanced techniques
+
+**Response Format (JSON only):**
+{{
+  "milestones": [
+    {{
+      "name": "Clear, actionable milestone name (no generic terms like 'Part 1')",
+      "description": "Detailed description of what will be learned",
+      "estimated_duration": "X days/weeks",
+      "topics": [
+        "Specific, actionable topic 1",
+        "Specific, actionable topic 2",
+        "Specific, actionable topic 3",
+        "Specific, actionable topic 4",
+        "Specific, actionable topic 5"{topic_6_placeholder}
+      ]
+    }}
+  ]
+}}
+
+**Critical Rules:**
+- NO generic milestone names like "Milestone 1" or "Part 1"
+- Each topic must be specific and actionable
+- Topics should build on each other logically
+- Focus on practical, applicable skills
+- Make it relevant to real-world {topic} development
+
+Return ONLY valid JSON - no explanations, no markdown, just the JSON object."""
+
+TOPIC_EXPLANATION_PROMPT_TEMPLATE = """Generate comprehensive educational content for: "{topic_name}" at {skill_level} level.
+
+**Structure Required:**
+## Introduction
+Clear explanation of what {topic_name} is and its purpose.
+
+### Importance
+Why {topic_name} matters in real-world development and its key benefits.
+
+### Technical Details
+Core concepts, practical examples, and implementation details for {skill_level} level.
+Include code snippets if relevant.
+
+### Simple Explanation
+Explain {topic_name} in simple terms with analogies.
+
+**Requirements:**
+- 800+ words of substantive, topic-specific content
+- {skill_level} appropriate complexity
+- Practical and actionable information
+- Proper markdown formatting
+
+**JSON Response Format (CRITICAL - Follow exactly):**
+{{
+  "content": "Your complete markdown content here - replace ALL newlines with \\n and escape ALL quotes as \\\"",
+  "difficulty_level": "{skill_level}",
+  "estimated_time": "X minutes", 
+  "key_concepts": ["concept1", "concept2", "concept3"],
+  "prerequisites": null,
+  "learning_objectives": ["objective1", "objective2"]
+}}
+
+**CRITICAL JSON RULES:**
+1. The content field MUST be a single line with \\n for line breaks
+2. ALL quotes inside content MUST be escaped as \\\"
+3. NO unescaped backslashes - use \\\\ for literal backslashes
+4. NO actual newlines in the JSON - everything on single lines
+5. Return ONLY the JSON object - no markdown fences, no explanations
+
+**Example of correct content field:**
+"content": "# Topic Title\\n\\nThis is content with \\"quotes\\" and\\nnewlines properly escaped."
+
+**WRONG - Do not do this:**
+"content": "# Topic Title
+This breaks JSON"
+
+Return ONLY valid, properly escaped JSON."""
+
+TOPIC_SOURCES_PROMPT_TEMPLATE = """Generate 5 high-quality learning resources for the topic: "{topic_name}"
+
+Include a mix of:
+- Official documentation
+- Tutorial websites  
+- Video courses
+- Practice platforms
+- Books/articles
+
+**JSON Response:**
+{{
+  "sources": [
+    {{
+      "title": "Resource title",
+      "url": "https://example.com",
+      "type": "documentation|tutorial|video|practice|book",
+      "description": "Brief description of what this resource offers"
+    }}
+  ]
+}}
+
+Return ONLY valid JSON."""
+
+def create_batch_roadmap_prompt(topic: str, duration: str = None, skill_level: str = "basic") -> str:
+    from typing import Optional
+    
+    topics_per_milestone = 6 if skill_level == "basic" else 5
+    duration_instruction = f"- Duration: {duration}" if duration else "- Suggest appropriate duration for each milestone based on complexity and skill level"
+    topic_6_placeholder = ', "Specific, actionable topic 6"' if skill_level == "basic" else ''
+    
+    return BATCH_ROADMAP_PROMPT_TEMPLATE.format(
+        topic=topic,
+        skill_level=skill_level,
+        topics_per_milestone=topics_per_milestone,
+        duration_instruction=duration_instruction,
+        topic_6_placeholder=topic_6_placeholder
+    )
+
+def create_topic_explanation_prompt(topic_name: str, skill_level: str = "basic") -> str:
+    return TOPIC_EXPLANATION_PROMPT_TEMPLATE.format(
+        topic_name=topic_name,
+        skill_level=skill_level
+    )
+
+def create_topic_sources_prompt(topic_name: str) -> str:
+    return TOPIC_SOURCES_PROMPT_TEMPLATE.format(topic_name=topic_name)
+
+DETAILED_CHATGPT_STYLE_PROMPT = """
+You are an expert technical content writer with the ability to create comprehensive, ChatGPT-style educational content.
+
+**Topic**: "{topic_name}"
+**Skill Level**: {skill_level}
+
+**Your Mission**: Create a detailed, professional technical explanation that follows the exact structure specified below. The content should be comprehensive, engaging, and adapted to the learner's skill level.
+
+**MANDATORY STRUCTURE** - Follow this EXACT format:
+
+## Introduction
+A clear, detailed introduction explaining what the topic is. Make it engaging and comprehensive.
+
+### Importance
+Why this topic matters in real-world scenarios. Include specific benefits and use cases.
+
+### Technical Details
+In-depth technical explanation, including concepts, definitions, and examples.
+If relevant, include code snippets in fenced code blocks with proper syntax highlighting.
+Adapt complexity based on skill level:
+- **basic**: Focus on fundamentals, use simple language, avoid jargon
+- **Intermediate**: Build on existing knowledge, introduce moderate complexity
+- **Advanced**: Deep technical details, advanced concepts, optimization techniques
+
+### Simple Explanation
+Explain the topic in the simplest possible terms, as if explaining to someone with no technical background. Use analogies, everyday examples, and plain language to make the concept crystal clear.
+
+**Quality Requirements**:
+- Write in a **ChatGPT-style**: clear, detailed, professional, not generic
+- Minimum 800 words of substantive content
+- Use proper Markdown formatting with headers, bullet points, code blocks
+- Include concrete examples and code snippets where relevant
+- Make it feel like a **comprehensive technical article**
+- Adapt language and complexity to the specified skill level
+
+**CRITICAL JSON FORMAT REQUIREMENTS**:
+1. Return ONLY valid JSON - no markdown code blocks, no explanations
+2. Escape all quotes and newlines properly in the content field
+3. Use \\n for line breaks in the content field
+4. Do not include any text before or after the JSON
+
+**Response Format** - Return as JSON:
+{{
+  "content": "[Complete markdown content with \\n for line breaks]",
+  "difficulty_level": "{skill_level}",
+  "estimated_time": "X minutes to read and understand",
+  "key_concepts": ["concept1", "concept2", "concept3"],
+  "prerequisites": ["prereq1", "prereq2"],
+  "learning_objectives": ["objective1", "objective2", "objective3"]
+}}
+
+**Critical**: The content must follow the EXACT structure with all sections: Introduction, Importance, Technical Details, and Simple Explanation. Use null for prerequisites if none exist.
+
+RETURN ONLY THE JSON OBJECT - NO OTHER TEXT.
 """
