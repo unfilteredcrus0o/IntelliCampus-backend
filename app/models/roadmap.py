@@ -45,6 +45,8 @@ class Roadmap(Base):
     interests = Column(JSON)
     timelines = Column(JSON)
     status = Column(Enum(RoadmapStatus), default=RoadmapStatus.pending)
+    start_date = Column(String, nullable=True)
+    end_date = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     milestones = relationship("Milestone", back_populates="roadmap", cascade="all, delete", order_by="Milestone.order_index")

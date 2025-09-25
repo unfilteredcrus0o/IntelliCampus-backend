@@ -53,6 +53,8 @@ async def create_roadmap_with_pipeline(db: Session, roadmap_data: dict) -> Roadm
         level=roadmap_data["level"],
         interests=roadmap_data["interests"],
         timelines=roadmap_data["timelines"],
+        start_date=roadmap_data.get("start_date"),
+        end_date=roadmap_data.get("end_date"),
         status=RoadmapStatus.pending
     )
 

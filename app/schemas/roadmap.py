@@ -32,6 +32,8 @@ class RoadmapCreate(BaseModel):
     skillLevel: str
     duration: Optional[str] = None
     title: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     due_date: Optional[datetime] = Field(None, description="Due date for auto-assigned courses (SuperAdmin only)")
 
 class TopicProgressResponse(BaseModel):
@@ -87,6 +89,12 @@ class DashboardEnrollmentResponse(BaseModel):
      user_id: str
      role: str
      enrolled_at: datetime
+     course_title: str
+     start_date: Optional[str] = None
+     due_date: Optional[str] = None
+     assigned_by: Optional[str] = None
+     assigned_to: Optional[str] = None
+     assignment_type: str  # "self_created", "assigned", "creator_enrolled"
      total_topics: int
      completed_topics: int
      progress_percentage: float

@@ -208,6 +208,12 @@ def create_roadmap(
         if roadmap_data.title and roadmap_data.title.strip():
             roadmap_input["title"] = roadmap_data.title
             
+        # Add start_date and end_date if provided
+        if roadmap_data.start_date:
+            roadmap_input["start_date"] = roadmap_data.start_date
+        if roadmap_data.end_date:
+            roadmap_input["end_date"] = roadmap_data.end_date
+            
     elif validation_result["action"] == "proceed":
 
         valid_topics = validation_result["valid_topics"]
@@ -224,6 +230,12 @@ def create_roadmap(
         
         if roadmap_data.duration:
             roadmap_input["timelines"] = {topic: roadmap_data.duration for topic in valid_topics}
+            
+        # Add start_date and end_date if provided
+        if roadmap_data.start_date:
+            roadmap_input["start_date"] = roadmap_data.start_date
+        if roadmap_data.end_date:
+            roadmap_input["end_date"] = roadmap_data.end_date
     
     roadmap = create_roadmap_with_llm_fast(db, roadmap_input)
 
@@ -567,11 +579,42 @@ def list_dashboard_enrollments(
             user = db.query(User).filter(User.id == enrolled_user_id).first()
             user_role = user.role.value if user else "unknown"
             
-        responses.append(DashboardEnrollmentResponse(
-            roadmap_id=roadmap_id,
-            user_id=enrolled_user_id,
-          role=user_role,
-          enrolled_at=enrolled_at,
+            # Get course title from roadmap
+            course_title = roadmap.title if roadmap else "Unknown Course"
+            
+            # Get start date and due date from roadmap if available, otherwise use assignment/enrollment dates
+            # Format dates as strings to return exact format to frontend
+            start_date = roadmap.start_date if roadmap.start_date else (enrolled_at.isoformat() if enrolled_at else None)
+            due_date = roadmap.end_date if roadmap.end_date else (assignment.due_date.isoformat() if assignment and assignment.due_date else None)
+            
+            # Determine assignment details and type
+            if assignment:
+                # User was assigned to this roadmap
+                assigned_by = assignment.assigned_by
+                assigned_to = assignment.assigned_to
+                assignment_type = "assigned"
+            elif roadmap.creator_id == enrolled_user_id:
+                # User created this roadmap themselves
+                assigned_by = None
+                assigned_to = None
+                assignment_type = "self_created"
+            else:
+                # User has progress but no assignment and isn't creator (enrolled somehow)
+                assigned_by = None
+                assigned_to = None
+                assignment_type = "creator_enrolled"
+            
+            responses.append(DashboardEnrollmentResponse(
+                roadmap_id=roadmap_id,
+                user_id=enrolled_user_id,
+                role=user_role,
+                enrolled_at=enrolled_at,
+                course_title=course_title,
+                start_date=start_date,
+                due_date=due_date,
+                assigned_by=assigned_by,
+                assigned_to=assigned_to,
+                assignment_type=assignment_type,
                 total_topics=total_topics,
                 completed_topics=completed_topics,
                 progress_percentage=progress_percentage,
