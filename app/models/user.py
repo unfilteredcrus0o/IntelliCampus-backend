@@ -25,6 +25,7 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.employee)
     manager_id = Column(String, ForeignKey("users.id"), nullable=True)
+    image_url = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
     
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")

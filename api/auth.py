@@ -9,7 +9,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from app.schemas.user import UserCreate, UserLogin, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, UserProfile
+from app.schemas.user import UserCreate, UserLogin, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, UserProfile, UserProfileUpdate
 from app.services.auth_service import register_user, authenticate_user, refresh_user_token
 from app.core.security import revoke_refresh_token, get_current_user
 from app.db.database import get_db
@@ -82,4 +82,29 @@ def get_current_user_profile(
         name=current_user.name,
         email=current_user.email,
         role=current_user.role,
+        image_url=current_user.image_url,
+    )
+
+@router.put("/user", response_model=UserProfile)
+def update_user_profile(
+    profile_update: UserProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update the currently authenticated user's profile.
+    Currently supports updating the profile image URL.
+    """
+    if profile_update.image_url is not None:
+        current_user.image_url = profile_update.image_url
+    
+    db.commit()
+    db.refresh(current_user)
+    
+    return UserProfile(
+        id=current_user.id,
+        name=current_user.name,
+        email=current_user.email,
+        role=current_user.role,
+        image_url=current_user.image_url,
     )

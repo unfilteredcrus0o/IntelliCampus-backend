@@ -19,6 +19,7 @@ def get_available_managers(db: Session = Depends(get_db)):
             "id": manager.id,
             "name": manager.name,
             "email": manager.email,
+            "image_url": manager.image_url,
             "employee_count": db.query(User).filter(User.manager_id == manager.id).count()
         }
         for manager in managers
@@ -91,7 +92,8 @@ def get_all_users_for_assignment(
                 "id": user.id,
                 "name": user.name,
                 "email": user.email,
-                "role": user.role.value
+                "role": user.role.value,
+                "image_url": user.image_url
             }
             for user in users
         ]

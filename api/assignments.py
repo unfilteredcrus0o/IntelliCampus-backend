@@ -186,13 +186,15 @@ def get_my_assignments(
     logger.info(f"User {current_user.id} requesting their assignments")
     
     try:
+        assignment_list = []
+        
+        # 1. Get assignments TO the user (existing logic)
         assignments = db.query(Assignment).filter(
             Assignment.assigned_to == current_user.id
         ).join(Roadmap, Assignment.roadmap_id == Roadmap.id).all()
         
-        logger.debug(f"Found {len(assignments)} assignments for user {current_user.id}")
+        logger.debug(f"Found {len(assignments)} assignments TO user {current_user.id}")
         
-        assignment_list = []
         for assignment in assignments:
             roadmap = db.query(Roadmap).filter(Roadmap.id == assignment.roadmap_id).first()
             assigner = db.query(User).filter(User.id == assignment.assigned_by).first()
@@ -207,6 +209,29 @@ def get_my_assignments(
                 "assigned_at": assignment.created_at,
                 "status": "assigned"
             })
+        
+        # 2. Get roadmaps CREATED BY the user (new logic for self-created roadmaps)
+        created_roadmaps = db.query(Roadmap).filter(
+            Roadmap.creator_id == current_user.id
+        ).all()
+        
+        logger.debug(f"Found {len(created_roadmaps)} roadmaps CREATED BY user {current_user.id}")
+        
+        for roadmap in created_roadmaps:
+            # Check if this roadmap is already in the assignment list (to avoid duplicates)
+            already_assigned = any(item["roadmap_id"] == roadmap.id for item in assignment_list)
+            
+            if not already_assigned:
+                assignment_list.append({
+                    "assignment_id": None,  # No assignment record for self-created
+                    "roadmap_id": roadmap.id,
+                    "roadmap_title": roadmap.title,
+                    "assigned_by": current_user.id,
+                    "assigner_name": current_user.name,
+                    "due_date": roadmap.end_date,  # Use roadmap's end_date as due_date
+                    "assigned_at": roadmap.created_at,
+                    "status": "self_created"
+                })
         
         response = {
             "user_id": current_user.id,

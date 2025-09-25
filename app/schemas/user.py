@@ -34,6 +34,7 @@ class UserInfo(BaseModel):
     email: str
     name: str
     role: UserRole
+    image_url: Optional[str] = None
 
 class RefreshTokenResponse(BaseModel):
     access_token: str
@@ -46,6 +47,7 @@ class UserProfile(BaseModel):
     name: str
     email: str
     role: UserRole
+    image_url: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -55,6 +57,10 @@ class UserResponse(BaseModel):
     name: str
     email: EmailStr
     manager_id: Optional[str] = None
+    image_url: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+class UserProfileUpdate(BaseModel):
+    image_url: Optional[str] = None
