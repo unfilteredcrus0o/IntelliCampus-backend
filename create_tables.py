@@ -1,5 +1,5 @@
 from app.db.database import Base, engine
-from app.models import user, roadmap
+from app.models import user, roadmap, quiz
 import logging
 
 logger = logging.getLogger(__name__)

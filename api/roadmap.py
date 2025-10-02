@@ -31,6 +31,7 @@ from app.schemas.roadmap import (
     MilestoneProgressResponse, RoadmapProgressResponse, 
     DashboardRoadmapResponse, DashboardEnrollmentResponse
 )
+from app.schemas.quiz import QuizStartResponse
 from app.services.course_validator import validate_course_input, create_custom_course_roadmap_data
 from app.services.roadmap_service import (
     create_roadmap_with_llm_fast,
@@ -40,6 +41,7 @@ from app.services.roadmap_service import (
     get_roadmap_with_progress,
     generate_topic_sources,
 )
+from app.services.quiz_service import get_or_create_quiz, start_quiz_attempt, get_quiz_with_questions
 from app.core.security import get_current_user
 from datetime import datetime, timezone
 
@@ -332,6 +334,62 @@ def get_topic_explanation_endpoint(
         "key_concepts": explanation_data["key_concepts"],
         "learning_objectives": explanation_data["learning_objectives"],
     }
+
+@router.post("/topics/{topic_id}/quiz/start", response_model=QuizStartResponse)
+def start_topic_quiz(
+    topic_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Start a quick quiz for a specific topic.
+    
+    If a quiz exists for the topic, fetch the latest quiz.
+    If not, call LLM to generate a new quiz and insert into DB.
+    Create a new quiz_attempts row and return quiz with questions.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Verify user has access to this topic
+        topic = _get_topic_with_access_check(db, topic_id, current_user.id)
+        logger.info(f"Starting quiz for topic {topic_id} ({topic.name}) by user {current_user.id}")
+        
+        # Get or create quiz for this topic
+        quiz = get_or_create_quiz(db, topic_id, current_user.id)
+        
+        # Create new quiz attempt
+        attempt = start_quiz_attempt(db, quiz.id, current_user.id)
+        
+        # Get quiz data with questions
+        quiz_data = get_quiz_with_questions(db, quiz.id)
+        if not quiz_data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve quiz data"
+            )
+        
+        # Build response
+        response = QuizStartResponse(
+            quiz_id=quiz.id,
+            attempt_id=attempt.id,
+            questions=quiz_data["questions"],
+            quiz_type=quiz_data["quiz_type"],
+            topic_name=quiz_data["topic_name"]
+        )
+        
+        logger.info(f"Successfully started quiz {quiz.id}, attempt {attempt.id} for topic {topic_id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start quiz for topic {topic_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start quiz: {str(e)}"
+        )
 
 @router.get("/roadmap/user", response_model=List[DashboardRoadmapResponse])
 def get_user_roadmaps(
