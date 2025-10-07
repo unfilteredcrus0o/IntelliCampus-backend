@@ -63,6 +63,7 @@ class Milestone(Base):
 
     roadmap = relationship("Roadmap", back_populates="milestones")
     topics = relationship("Topic", back_populates="milestone", cascade="all, delete")
+    quizzes = relationship("Quiz", back_populates="milestone", cascade="all, delete")
 
 class Topic(Base):
     __tablename__ = "topics"
@@ -75,6 +76,7 @@ class Topic(Base):
     
     milestone = relationship("Milestone", back_populates="topics")
     progress = relationship("UserProgress", back_populates="topic", cascade="all, delete")
+    quizzes = relationship("Quiz", back_populates="topic", cascade="all, delete")
 
 class UserProgress(Base):
     __tablename__ = "user_progress"

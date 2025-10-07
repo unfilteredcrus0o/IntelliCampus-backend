@@ -29,6 +29,8 @@ class User(Base):
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
     
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+    created_quizzes = relationship("Quiz", back_populates="creator", cascade="all, delete-orphan")
+    quiz_attempts = relationship("QuizAttempt", back_populates="user", cascade="all, delete-orphan")
     
     manager = relationship("User", remote_side=[id], back_populates="employees")
     employees = relationship("User", back_populates="manager")
